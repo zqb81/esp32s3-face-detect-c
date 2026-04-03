@@ -6,6 +6,7 @@
 #include "config.h"
 #include "esp_log.h"
 #include "esp_http_server.h"
+#include "esp_http_client.h"
 #include <string.h>
 
 static const char *TAG = "http";

@@ -9,6 +9,7 @@ idf_component_register(
         esp_timer
         mqtt
         esp_http_server
+        esp_http_client
         json
         driver
     # esp32-camera, esp-dl 通过 idf_component.yml 管理

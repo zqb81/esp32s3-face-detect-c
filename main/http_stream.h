@@ -26,4 +26,12 @@ void http_stream_update_frame(const uint8_t *jpeg_data, size_t len);
  */
 void http_stream_stop(void);
 
+/**
+ * 上传 JPEG 帧到远程服务器
+ * @param jpeg_data JPEG 数据
+ * @param len 数据长度
+ * @param interval_ms 最短上传间隔 (ms)
+ */
+void http_stream_upload(const uint8_t *jpeg_data, size_t len, int interval_ms);
+
 #endif // HTTP_STREAM_H

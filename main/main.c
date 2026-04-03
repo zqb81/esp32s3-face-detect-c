@@ -1,6 +1,6 @@
 /**
- * ESP32-S3 人脸检测 - 主入口
- * 摄像头→人脸检测→TFT显示→MQTT上报→HTTP视频流
+ * ESP32-S3 人脸检测 - 主入口 (JPEG 模式)
+ * 摄像头 JPEG → 解码 RGB565 → 检测+TFT → HTTP POST 上传
  */
 
 #include <stdio.h>
@@ -13,6 +13,7 @@
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 
 #include "config.h"
 #include "camera.h"
@@ -23,7 +24,7 @@
 
 static const char *TAG = "main";
 
-// ===== WiFi 初始化 =====
+// ===== WiFi =====
 static void wifi_init(void)
 {
     esp_netif_init();
@@ -44,24 +45,25 @@ static void wifi_init(void)
     esp_wifi_set_mode(WIFI_MODE_STA);
     esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
     esp_wifi_start();
-
-    ESP_LOGI(TAG, "WiFi connecting to %s ...", WIFI_SSID);
     esp_wifi_connect();
 
+    ESP_LOGI(TAG, "WiFi 连接中: %s", WIFI_SSID);
+
     // 等待连接
-    int retry = 0;
-    while (retry < WIFI_MAX_RETRY) {
+    for (int i = 0; i < WIFI_MAX_RETRY; i++) {
         wifi_ap_record_t ap_info;
         if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
-            ESP_LOGI(TAG, "WiFi OK: %s", ap_info.ssid);
-            break;
+            esp_netif_ip_info_t ip_info;
+            esp_netif_get_ip_info(esp_netif_get_handle_from_ifkey("WIFI_STA_DEF"), &ip_info);
+            ESP_LOGI(TAG, "WiFi OK: " IPSTR, IP2STR(&ip_info.ip));
+            return;
         }
         vTaskDelay(pdMS_TO_TICKS(1000));
-        retry++;
     }
+    ESP_LOGW(TAG, "WiFi 连接超时");
 }
 
-// ===== 下采样：QVGA → TFT =====
+// ===== 下采样 RGB565 → TFT =====
 static void downsample_frame(const uint8_t *src, uint8_t *dst,
                               int src_w, int src_h, int dst_w, int dst_h)
 {
@@ -70,7 +72,7 @@ static void downsample_frame(const uint8_t *src, uint8_t *dst,
     int src_y = 0;
 
     for (int row = 0; row < dst_h; row++) {
-        int src_row = src_h - 1 - src_y;  // 上下翻转
+        int src_row = src_h - 1 - src_y;
         int src_row_off = src_row * src_stride;
 
         for (int col = 0; col < dst_w; col++) {
@@ -80,7 +82,6 @@ static void downsample_frame(const uint8_t *src, uint8_t *dst,
             dst_off += 2;
         }
 
-        // Y 方向：240→160，交替跳行
         if (row % 3 == 2)
             src_y += 2;
         else
@@ -104,7 +105,6 @@ static void draw_face_boxes(uint8_t *buf, const face_list_t *faces,
         int dx2 = (int)(cx + hw); if (dx2 >= dst_w) dx2 = dst_w - 1;
         int dy2 = (int)(cy + hh); if (dy2 >= dst_h) dy2 = dst_h - 1;
 
-        // 选择颜色
         uint16_t color;
         if (f->score > 0.8f)      color = COLOR_GREEN;
         else if (f->score > 0.6f) color = COLOR_YELLOW;
@@ -117,78 +117,100 @@ static void draw_face_boxes(uint8_t *buf, const face_list_t *faces,
 // ===== 主任务 =====
 static void main_task(void *arg)
 {
-    ESP_LOGI(TAG, "=== ESP32-S3 人脸检测 C 版本 ===");
+    ESP_LOGI(TAG, "=== ESP32-S3 人脸检测 C 版本 (JPEG 模式) ===");
 
-    // TFT buffer
+    // 分配 TFT buffer
     uint8_t *tft_buf = heap_caps_malloc(TFT_WIDTH * TFT_HEIGHT * 2, MALLOC_CAP_DMA);
-    if (!tft_buf) {
-        ESP_LOGE(TAG, "TFT buffer 分配失败");
+    // 分配 RGB565 解码 buffer (PSRAM)
+    uint8_t *rgb_buf = heap_caps_malloc(CAM_W * CAM_H * 2, MALLOC_CAP_SPIRAM);
+
+    if (!tft_buf || !rgb_buf) {
+        ESP_LOGE(TAG, "缓冲区分配失败 (tft:%p rgb:%p)", tft_buf, rgb_buf);
         vTaskDelete(NULL);
         return;
     }
 
+    ESP_LOGI(TAG, "缓冲区 OK (TFT:%p RGB:%p, %.0fKB PSRAM)",
+             tft_buf, rgb_buf, CAM_W * CAM_H * 2 / 1024.0f);
+
     int frame = 0;
     int fps_count = 0;
     int64_t fps_time = esp_timer_get_time();
+    int last_jpeg_size = 0;
 
     while (1) {
-        // 1. 捕获
+        // 1. 捕获 JPEG
         camera_fb_t *fb = camera_capture();
         if (!fb) {
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
 
-        // 2. 下采样到 TFT
-        downsample_frame(fb->buf, tft_buf, 320, 240, TFT_WIDTH, TFT_HEIGHT);
+        last_jpeg_size = fb->len;
 
-        // 3. 人脸检测（每 N 帧）
-        face_list_t faces = {0};
-        if (frame % 5 == 0) {
-            esp_err_t ret = face_detect_run(fb->buf, 320, 240, &faces);
-            if (ret == ESP_OK && faces.count > 0) {
-                mqtt_send_faces(&faces);
+        // 2. JPEG → RGB565 解码
+        int out_w = 0, out_h = 0;
+        esp_err_t dec_ret = camera_jpeg_to_rgb565(fb->buf, fb->len,
+                                                   rgb_buf, &out_w, &out_h);
 
-                // 上传最佳人脸
-                const face_result_t *best = &faces.faces[0];
-                for (int i = 1; i < faces.count; i++) {
-                    if (faces.faces[i].score > best->score)
-                        best = &faces.faces[i];
-                }
-                if (best->score > FACE_SCORE_THRESHOLD) {
-                    mqtt_send_face_crop(fb->buf, 320, 240, best);
+        if (dec_ret == ESP_OK && out_w > 0) {
+            // 3. 下采样到 TFT
+            downsample_frame(rgb_buf, tft_buf, out_w, out_h, TFT_WIDTH, TFT_HEIGHT);
+
+            // 4. 人脸检测（每 5 帧）
+            face_list_t faces = {0};
+            if (frame % 5 == 0) {
+                face_detect_run(rgb_buf, out_w, out_h, &faces);
+                if (faces.count > 0) {
+                    mqtt_send_faces(&faces);
+                    // 上传最佳人脸
+                    const face_result_t *best = &faces.faces[0];
+                    for (int i = 1; i < faces.count; i++) {
+                        if (faces.faces[i].score > best->score)
+                            best = &faces.faces[i];
+                    }
+                    if (best->score > FACE_SCORE_THRESHOLD) {
+                        mqtt_send_face_crop(rgb_buf, out_w, out_h, best);
+                    }
                 }
             }
+
+            // 5. 画人脸框 + 显示
+            if (faces.count > 0) {
+                draw_face_boxes(tft_buf, &faces, TFT_WIDTH, TFT_HEIGHT, out_w, out_h);
+            }
+            display_draw_frame(tft_buf);
+            face_detect_free(&faces);
         }
 
-        // 4. 画人脸框
-        if (faces.count > 0) {
-            draw_face_boxes(tft_buf, &faces, TFT_WIDTH, TFT_HEIGHT, 320, 240);
-        }
-
-        // 5. 显示
-        display_draw_frame(tft_buf);
-
-        // 6. HTTP 视频流（JPEG 编码）
-        // TODO: JPEG 编码 fb->buf → http_stream_update_frame()
+        // 6. HTTP 流（本地 + 远程上传）
+        http_stream_update_frame(fb->buf, fb->len);
+        http_stream_upload(fb->buf, fb->len, 100);  // 每 100ms 上传一次
 
         // 释放帧
         camera_return(fb);
-        face_detect_free(&faces);
 
-        // FPS 统计
+        // GC
+        if (frame % 20 == 0) {
+            heap_caps_print_heap_info(MALLOC_CAP_SPIRAM);
+        }
+
+        // FPS
         frame++;
         fps_count++;
         int64_t elapsed = (esp_timer_get_time() - fps_time) / 1000;
         if (elapsed >= 1000) {
             float fps = fps_count * 1000.0f / elapsed;
-            ESP_LOGI(TAG, "FPS: %.1f | 帧: %d", fps, frame);
+            size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+            ESP_LOGI(TAG, "FPS:%.1f 帧:%d JPEG:%dB PSRAM:%.0fKB free",
+                     fps, frame, last_jpeg_size, free_psram / 1024.0f);
             fps_time = esp_timer_get_time();
             fps_count = 0;
         }
     }
 
     free(tft_buf);
+    free(rgb_buf);
     vTaskDelete(NULL);
 }
 
@@ -205,16 +227,14 @@ void app_main(void)
     // WiFi
     wifi_init();
 
-    // 各模块初始化
+    // 模块初始化
     display_init();
     camera_init();
     face_detect_init();
     mqtt_init();
     http_stream_start(HTTP_STREAM_PORT);
 
-    ESP_LOGI(TAG, "视频流: http://<IP>:%d/stream", HTTP_STREAM_PORT);
-
-    // 启动主循环
-    xTaskCreatePinnedToCore(main_task, "main", TASK_STACK_SIZE * 2,
+    // 启动主循环 (双倍栈，JPEG 解码需要)
+    xTaskCreatePinnedToCore(main_task, "main", TASK_STACK_SIZE * 4,
                             NULL, TASK_PRIORITY, NULL, 0);
 }

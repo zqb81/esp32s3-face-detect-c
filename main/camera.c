@@ -1,10 +1,14 @@
 /**
- * 摄像头驱动实现 - OV5640 via esp32-camera
+ * 摄像头驱动实现 - OV5640 JPEG 输出
+ * JPEG 捕获 → 解码 RGB565 → 本地处理 + 上传
  */
 
 #include "camera.h"
 #include "config.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
+#include "jpeg_decoder.h"  // esp_jpeg 组件
+#include <string.h>
 
 static const char *TAG = "camera";
 
@@ -30,12 +34,12 @@ esp_err_t camera_init(void)
         .xclk_freq_hz = CAM_XCLK_FREQ,
         .ledc_timer   = LEDC_TIMER_0,
         .ledc_channel = LEDC_CHANNEL_0,
-        .pixel_format = PIXFORMAT_RGB565,
-        .frame_size   = FRAMESIZE_QVGA,  // 320x240
-        .jpeg_quality = 12,
+        .pixel_format = PIXFORMAT_JPEG,       // JPEG 输出
+        .frame_size   = FRAMESIZE_QVGA,        // 320x240
+        .jpeg_quality = 12,                     // 1-63，越小质量越高
         .fb_count     = 2,
         .grab_mode    = CAMERA_GRAB_WHEN_EMPTY,
-        .fb_location  = CAMERA_FB_IN_PSRAM,
+        .fb_location  = CAMERA_FB_IN_PSRAM,    // PSRAM 存帧
     };
 
     esp_err_t err = esp_camera_init(&config);
@@ -46,12 +50,11 @@ esp_err_t camera_init(void)
 
     sensor_t *s = esp_camera_sensor_get();
     if (s) {
-        s->set_vflip(s, 0);    // 不翻转
-        s->set_hmirror(s, 0);   // 不镜像
-        // 如果画面倒了，改 set_vflip(s, 1)
+        s->set_vflip(s, 0);
+        s->set_hmirror(s, 0);
     }
 
-    ESP_LOGI(TAG, "摄像头 OK (QVGA RGB565)");
+    ESP_LOGI(TAG, "摄像头 OK (JPEG QVGA)");
     return ESP_OK;
 }
 
@@ -63,6 +66,43 @@ camera_fb_t *camera_capture(void)
 void camera_return(camera_fb_t *fb)
 {
     esp_camera_fb_return(fb);
+}
+
+/**
+ * JPEG 解码为 RGB565
+ * @param jpeg_data  JPEG 数据
+ * @param jpeg_len   JPEG 数据长度
+ * @param rgb_buf    输出 RGB565 buffer (需预分配 320*240*2 = 153600 字节)
+ * @param width      输出宽度
+ * @param height     输出高度
+ * @return ESP_OK on success
+ */
+esp_err_t camera_jpeg_to_rgb565(const uint8_t *jpeg_data, size_t jpeg_len,
+                                 uint8_t *rgb_buf, int *width, int *height)
+{
+    // esp_jpeg 解码器配置
+    esp_jpeg_image_cfg_t cfg = {
+        .indata = jpeg_data,
+        .indata_size = jpeg_len,
+        .outbuf = rgb_buf,
+        .outbuf_size = CAM_W * CAM_H * 2,  // RGB565 输出 buffer 大小
+        .out_format = JPEG_IMAGE_FORMAT_RGB565,
+        .out_scale = JPEG_IMAGE_SCALE_0,
+        .flags = {
+            .swap_color_bytes = 1,  // RGB565 字节序
+        }
+    };
+
+    esp_jpeg_image_output_t out_info = {0};
+    esp_err_t ret = esp_jpeg_decode(&cfg, &out_info);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "JPEG 解码失败: 0x%x", ret);
+        return ret;
+    }
+
+    *width = out_info.width;
+    *height = out_info.height;
+    return ESP_OK;
 }
 
 void camera_deinit(void)
