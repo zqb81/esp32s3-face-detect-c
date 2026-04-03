@@ -1,5 +1,5 @@
 /**
- * HTTP MJPEG 视频流实现
+ * HTTP MJPEG 视频流 + 云端上传
  */
 
 #include "http_stream.h"
@@ -28,20 +28,17 @@ static const char index_html[] =
     "<img id='v' src='/stream'>"
     "<div id='info'>MJPEG Stream</div></body></html>";
 
-// ===== 根路径处理器 =====
 static esp_err_t index_handler(httpd_req_t *req)
 {
     httpd_resp_send(req, index_html, HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
 
-// ===== MJPEG 流处理器 =====
 static esp_err_t stream_handler(httpd_req_t *req)
 {
     esp_err_t res;
     char hdr[128];
 
-    // 设置 multipart 响应头
     res = httpd_resp_set_type(req, "multipart/x-mixed-replace; boundary=frame");
     if (res != ESP_OK) return res;
 
@@ -53,22 +50,19 @@ static esp_err_t stream_handler(httpd_req_t *req)
             continue;
         }
 
-        // 发送帧头
         int hdr_len = snprintf(hdr, sizeof(hdr),
             "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %zu\r\n\r\n",
             s_jpeg_len);
         res = httpd_resp_send_chunk(req, hdr, hdr_len);
         if (res != ESP_OK) break;
 
-        // 发送 JPEG 数据
         res = httpd_resp_send_chunk(req, (const char *)s_latest_jpeg, s_jpeg_len);
         if (res != ESP_OK) break;
 
-        // 帧尾
         res = httpd_resp_send_chunk(req, "\r\n", 2);
         if (res != ESP_OK) break;
 
-        vTaskDelay(pdMS_TO_TICKS(33));  // ~30fps 上限
+        vTaskDelay(pdMS_TO_TICKS(33));
     }
 
     return ESP_OK;
@@ -86,7 +80,6 @@ esp_err_t http_stream_start(int port)
         return ESP_FAIL;
     }
 
-    // 注册处理器
     httpd_uri_t index_uri = {
         .uri = "/",
         .method = HTTP_GET,
@@ -118,5 +111,28 @@ void http_stream_stop(void)
     if (s_server) {
         httpd_stop(s_server);
         s_server = NULL;
+    }
+}
+
+// ===== 上传到云端 =====
+static const char *UPLOAD_URL = "http://101.33.209.65:8081/upload";
+
+void http_stream_upload(const uint8_t *jpeg_data, size_t len)
+{
+    esp_http_client_config_t cfg = {
+        .url = UPLOAD_URL,
+        .method = HTTP_METHOD_POST,
+        .timeout_ms = 2000,
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (client) {
+        esp_http_client_set_post_field(client, (const char *)jpeg_data, len);
+        esp_http_client_set_header(client, "Content-Type", "image/jpeg");
+        esp_err_t err = esp_http_client_perform(client);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "上传失败: %s", esp_err_to_name(err));
+        }
+        esp_http_client_cleanup(client);
     }
 }

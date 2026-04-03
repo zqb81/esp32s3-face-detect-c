@@ -32,6 +32,6 @@ void http_stream_stop(void);
  * @param len 数据长度
  * @param interval_ms 最短上传间隔 (ms)
  */
-void http_stream_upload(const uint8_t *jpeg_data, size_t len, int interval_ms);
+void http_stream_upload(const uint8_t *jpeg_data, size_t len);
 
 #endif // HTTP_STREAM_H
