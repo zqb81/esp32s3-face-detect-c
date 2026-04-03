@@ -7,8 +7,8 @@ idf_component_register(
         esp_event
         nvs_flash
         esp_timer
+        mqtt
         esp_http_server
         driver
     # esp32-camera, esp-dl 通过 idf_component.yml 管理
-    # MQTT 手动添加: idf.py add-dependency "espressif/espressif__mqtt"
 )
