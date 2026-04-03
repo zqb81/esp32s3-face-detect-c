@@ -46,8 +46,9 @@ esp_err_t camera_init(void)
 
     sensor_t *s = esp_camera_sensor_get();
     if (s) {
-        s->set_vflip(s, 1);    // 上下翻转
-        s->set_hmirror(s, 0);
+        s->set_vflip(s, 0);    // 不翻转
+        s->set_hmirror(s, 0);   // 不镜像
+        // 如果画面倒了，改 set_vflip(s, 1)
     }
 
     ESP_LOGI(TAG, "摄像头 OK (QVGA RGB565)");
