@@ -107,11 +107,17 @@ void display_draw_frame(const uint8_t *buf)
     tft_set_window(0, 0, TFT_WIDTH - 1, TFT_HEIGHT - 1);
 
     gpio_set_level(TFT_PIN_DC, 1);
-    spi_transaction_t t = {
-        .length = TFT_WIDTH * TFT_HEIGHT * 2 * 8,
-        .tx_buffer = buf,
-    };
-    spi_device_polling_transmit(spi, &t);
+    // 分块传输（每行 128*2=256 字节）
+    const int chunk_rows = 40;  // 每次传 40 行 = 10240 字节
+    for (int y = 0; y < TFT_HEIGHT; y += chunk_rows) {
+        int rows = chunk_rows;
+        if (y + rows > TFT_HEIGHT) rows = TFT_HEIGHT - y;
+        spi_transaction_t t = {
+            .length = TFT_WIDTH * rows * 2 * 8,
+            .tx_buffer = buf + y * TFT_WIDTH * 2,
+        };
+        spi_device_polling_transmit(spi, &t);
+    }
 }
 
 void display_draw_rect(uint8_t *buf, int x, int y, int w, int h, uint16_t color)
