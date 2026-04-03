@@ -7,6 +7,7 @@
 
 #include "esp_err.h"
 #include <stdint.h>
+#include <stdbool.h>
 
 // RGB565 颜色
 #define COLOR_BLACK   0x0000

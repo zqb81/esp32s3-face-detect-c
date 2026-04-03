@@ -5,6 +5,7 @@
 #include "mqtt_comm.h"
 #include "config.h"
 #include "esp_log.h"
+#include <stdbool.h>
 #include "mqtt_client.h"
 #include "cJSON.h"
 #include "esp_timer.h"
