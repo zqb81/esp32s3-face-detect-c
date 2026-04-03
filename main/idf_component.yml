@@ -4,5 +4,3 @@ dependencies:
     version: "^2.0.0"
   espressif/esp-dl:
     version: "*"
-  espressif/esp-mqtt:
-    version: "*"
