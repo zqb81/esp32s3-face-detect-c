@@ -7,9 +7,8 @@ idf_component_register(
         esp_event
         nvs_flash
         esp_timer
-        mqtt
         esp_http_server
-        esp-dl
-        esp32-camera
         driver
+    PRIV_REQUIRES esp_mqtt
+    # esp32-camera, esp-dl 通过 idf_component.yml 管理
 )
