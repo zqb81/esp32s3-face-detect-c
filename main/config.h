@@ -37,6 +37,8 @@
 #define CAM_PIN_SCL     5
 
 #define CAM_XCLK_FREQ   20000000  // 20MHz
+#define CAM_W           320
+#define CAM_H           240
 
 // ===== TFT (ST7735 128x160) =====
 #define TFT_SPI_HOST    SPI2_HOST
