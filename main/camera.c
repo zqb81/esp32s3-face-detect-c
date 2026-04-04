@@ -85,11 +85,11 @@ esp_err_t camera_jpeg_to_rgb565(const uint8_t *jpeg_data, size_t jpeg_len,
         .indata = jpeg_data,
         .indata_size = jpeg_len,
         .outbuf = rgb_buf,
-        .outbuf_size = CAM_W * CAM_H * 2,  // RGB565 输出 buffer 大小
+        .outbuf_size = CAM_W * CAM_H * 2,
         .out_format = JPEG_IMAGE_FORMAT_RGB565,
         .out_scale = JPEG_IMAGE_SCALE_0,
         .flags = {
-            .swap_color_bytes = 1,  // RGB565 字节序
+            .swap_color_bytes = 0,
         }
     };
 
