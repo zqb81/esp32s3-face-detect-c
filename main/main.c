@@ -1,10 +1,14 @@
 /**
- * ESP32-S3 人脸检测 - 双核并行架构
+ * ESP32-S3 人脸检测 v0.4 - Buffer Pool + 双核优化架构
  *
- * Core 0: 摄像头采集 → JPEG解码 → 人脸检测 → TFT显示
- * Core 1: JPEG帧上传 → 云端中转服务器
+ * Core 0: 摄像头采集 → 复制到 pool buffer → 入队 → 立即 fb_return()
+ * Core 1: 取 buffer → JPEG解码 → 人脸检测 → TFT显示 → 上传 → 归还 pool
  *
- * 帧数据通过帧复制分发，避免 fb_return 竞争
+ * 关键优化:
+ * - 预分配 buffer 池，零 malloc/free
+ * - Core 0 只做 capture+copy+return，<5ms
+ * - 队列满自动丢帧
+ * - Core 1 统一处理解码/检测/显示/上传
  */
 
 #include <stdio.h>
@@ -29,13 +33,18 @@
 
 static const char *TAG = "main";
 
-// ===== 上传帧队列 =====
-typedef struct {
-    uint8_t *data;   // JPEG 数据副本 (malloc 分配)
-    size_t   len;    // 数据长度
-} upload_frame_t;
+// ===== Buffer Pool =====
+#define POOL_COUNT      4           // 预分配 4 个 buffer
+#define POOL_BUF_SIZE   (100 * 1024) // 每个 100KB (QVGA JPEG 通常 <30KB)
 
-static QueueHandle_t s_upload_queue = NULL;
+static uint8_t s_pool[POOL_COUNT][POOL_BUF_SIZE] __attribute__((aligned(16)));
+static QueueHandle_t s_free_queue = NULL;   // 空闲 buffer 指针队列
+static QueueHandle_t s_work_queue = NULL;   // 待处理 buffer 指针队列
+
+typedef struct {
+    uint8_t *data;
+    size_t   len;
+} frame_msg_t;
 
 // ===== WiFi =====
 static void wifi_init(void)
@@ -125,46 +134,14 @@ static void draw_face_boxes(uint8_t *buf, const face_list_t *faces,
 }
 
 // ============================================================
-// Core 1: 上传任务
-// 从队列取 JPEG 帧 → POST 到云端 → 释放内存
+// Core 0: 采集任务（极轻量）
+// capture → 从 pool 取 buf → memcpy → 入队 → fb_return
 // ============================================================
-static void upload_task(void *arg)
+static void capture_task(void *arg)
 {
-    ESP_LOGI(TAG, "上传任务启动 (Core %d)", xPortGetCoreID());
-
-    upload_frame_t frame;
-    while (1) {
-        if (xQueueReceive(s_upload_queue, &frame, pdMS_TO_TICKS(500)) == pdTRUE) {
-            http_stream_upload(frame.data, frame.len);
-            free(frame.data);  // 释放副本
-        }
-    }
-
-    vTaskDelete(NULL);
-}
-
-// ============================================================
-// Core 0: 主任务
-// 采集 → 解码 → 检测 → TFT → 复制JPEG给上传队列
-// ============================================================
-static void main_task(void *arg)
-{
-    ESP_LOGI(TAG, "主任务启动 (Core %d)", xPortGetCoreID());
-
-    // 分配缓冲区
-    uint8_t *tft_buf = heap_caps_malloc(TFT_WIDTH * TFT_HEIGHT * 2, MALLOC_CAP_DMA);
-    uint8_t *rgb_buf = heap_caps_malloc(CAM_W * CAM_H * 2, MALLOC_CAP_SPIRAM);
-
-    if (!tft_buf || !rgb_buf) {
-        ESP_LOGE(TAG, "缓冲区分配失败");
-        vTaskDelete(NULL);
-        return;
-    }
+    ESP_LOGI(TAG, "采集任务启动 (Core %d)", xPortGetCoreID());
 
     int frame = 0;
-    int fps_count = 0;
-    int64_t fps_time = esp_timer_get_time();
-    int last_jpeg_size = 0;
     int dropped = 0;
 
     while (1) {
@@ -175,42 +152,92 @@ static void main_task(void *arg)
             continue;
         }
 
-        last_jpeg_size = fb->len;
+        // 2. 从 pool 取空闲 buffer（非阻塞，没有就丢帧）
+        uint8_t *buf = NULL;
+        if (xQueueReceive(s_free_queue, &buf, 0) == pdTRUE) {
+            // 3. 复制 JPEG 到 pool buffer
+            if (fb->len <= POOL_BUF_SIZE) {
+                memcpy(buf, fb->buf, fb->len);
 
-        // 2. 帧复制 → 上传队列 (Core 1 处理)
-        uint8_t *jpeg_copy = malloc(fb->len);
-        if (jpeg_copy) {
-            memcpy(jpeg_copy, fb->buf, fb->len);
-            upload_frame_t uf = { .data = jpeg_copy, .len = fb->len };
-            if (xQueueSend(s_upload_queue, &uf, 0) != pdTRUE) {
-                // 队列满，丢弃
-                free(jpeg_copy);
-                dropped++;
+                // 4. 入工作队列（非阻塞，满了也丢帧）
+                frame_msg_t msg = { .data = buf, .len = fb->len };
+                if (xQueueSend(s_work_queue, &msg, 0) != pdTRUE) {
+                    // 队列满，归还 buffer
+                    xQueueSend(s_free_queue, &buf, 0);
+                    dropped++;
+                }
+            } else {
+                // JPEG 太大，归还 buffer
+                xQueueSend(s_free_queue, &buf, 0);
+                ESP_LOGW(TAG, "JPEG 超大: %zu > %d", fb->len, POOL_BUF_SIZE);
             }
+        } else {
+            dropped++;
         }
 
-        // 3. JPEG → RGB565 解码
+        // 5. 立即归还摄像头帧（关键！不阻塞采集）
+        camera_return(fb);
+
+        frame++;
+    }
+
+    vTaskDelete(NULL);
+}
+
+// ============================================================
+// Core 1: 处理任务（解码 + 检测 + 显示 + 上传）
+// ============================================================
+static void process_task(void *arg)
+{
+    ESP_LOGI(TAG, "处理任务启动 (Core %d)", xPortGetCoreID());
+
+    // 分配 RGB565 解码 buffer (PSRAM)
+    uint8_t *rgb_buf = heap_caps_malloc(CAM_W * CAM_H * 2, MALLOC_CAP_SPIRAM);
+    uint8_t *tft_buf = heap_caps_malloc(TFT_WIDTH * TFT_HEIGHT * 2, MALLOC_CAP_DMA);
+
+    if (!rgb_buf || !tft_buf) {
+        ESP_LOGE(TAG, "处理缓冲区分配失败");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    int frame = 0;
+    int fps_count = 0;
+    int64_t fps_time = esp_timer_get_time();
+    int last_jpeg_size = 0;
+
+    while (1) {
+        frame_msg_t msg;
+        if (xQueueReceive(s_work_queue, &msg, pdMS_TO_TICKS(500)) != pdTRUE) {
+            continue;
+        }
+
+        last_jpeg_size = msg.len;
+
+        // 1. JPEG → RGB565 解码
         int out_w = 0, out_h = 0;
-        esp_err_t dec_ret = camera_jpeg_to_rgb565(fb->buf, fb->len,
+        esp_err_t dec_ret = camera_jpeg_to_rgb565(msg.data, msg.len,
                                                    rgb_buf, &out_w, &out_h);
 
-        // 4. 释放原始帧（重要！不释放会内存泄漏）
-        camera_return(fb);
+        // 2. 上传到云端
+        http_stream_upload(msg.data, msg.len);
+
+        // 3. 归还 pool buffer（重要！采集任务才能复用）
+        xQueueSend(s_free_queue, &msg.data, 0);
 
         if (dec_ret != ESP_OK || out_w <= 0) {
             continue;
         }
 
-        // 5. 下采样到 TFT
+        // 4. 下采样到 TFT
         downsample_frame(rgb_buf, tft_buf, out_w, out_h, TFT_WIDTH, TFT_HEIGHT);
 
-        // 6. 人脸检测（每 5 帧）
+        // 5. 人脸检测（每 5 帧）
         face_list_t faces = {0};
         if (frame % 5 == 0) {
             face_detect_run(rgb_buf, out_w, out_h, &faces);
             if (faces.count > 0) {
                 mqtt_send_faces(&faces);
-                // 上传最佳人脸裁剪
                 const face_result_t *best = &faces.faces[0];
                 for (int i = 1; i < faces.count; i++) {
                     if (faces.faces[i].score > best->score)
@@ -222,34 +249,34 @@ static void main_task(void *arg)
             }
         }
 
-        // 7. 画人脸框 + 显示
+        // 6. 画框 + 显示
         if (faces.count > 0) {
             draw_face_boxes(tft_buf, &faces, TFT_WIDTH, TFT_HEIGHT, out_w, out_h);
         }
         display_draw_frame(tft_buf);
         face_detect_free(&faces);
 
-        // FPS 统计
+        // FPS
         frame++;
         fps_count++;
         int64_t elapsed = (esp_timer_get_time() - fps_time) / 1000;
         if (elapsed >= 1000) {
             float fps = fps_count * 1000.0f / elapsed;
-            size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-            size_t free_ram = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-            UBaseType_t qfree = uxQueueSpacesAvailable(s_upload_queue);
-            ESP_LOGI(TAG, "FPS:%.1f 帧:%d JPEG:%dB PSRAM:%.0fK RAM:%.0fK 丢帧:%d 队列空:%d",
+            size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+            size_t ram_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+            UBaseType_t work_pending = uxQueueMessagesWaiting(s_work_queue);
+            UBaseType_t free_avail = uxQueueMessagesWaiting(s_free_queue);
+            ESP_LOGI(TAG, "FPS:%.1f 帧:%d JPEG:%dB PSRAM:%.0fK RAM:%.0fK 待处理:%d 空闲池:%d",
                      fps, frame, last_jpeg_size,
-                     free_psram / 1024.0f, free_ram / 1024.0f,
-                     dropped, (int)qfree);
+                     psram_free / 1024.0f, ram_free / 1024.0f,
+                     work_pending, free_avail);
             fps_time = esp_timer_get_time();
             fps_count = 0;
-            dropped = 0;
         }
     }
 
-    free(tft_buf);
     free(rgb_buf);
+    free(tft_buf);
     vTaskDelete(NULL);
 }
 
@@ -258,7 +285,7 @@ static void main_task(void *arg)
 // ============================================================
 void app_main(void)
 {
-    ESP_LOGI(TAG, "=== ESP32-S3 人脸检测 v0.3 (双核并行) ===");
+    ESP_LOGI(TAG, "=== ESP32-S3 人脸检测 v0.4 (Buffer Pool + 双核) ===");
 
     // NVS
     esp_err_t ret = nvs_flash_init();
@@ -270,8 +297,17 @@ void app_main(void)
     // WiFi
     wifi_init();
 
-    // 上传队列 (最多缓冲 3 帧)
-    s_upload_queue = xQueueCreate(3, sizeof(upload_frame_t));
+    // 初始化 buffer pool
+    s_free_queue = xQueueCreate(POOL_COUNT, sizeof(uint8_t *));
+    s_work_queue = xQueueCreate(POOL_COUNT, sizeof(frame_msg_t));
+
+    // 所有 buffer 放入空闲队列
+    for (int i = 0; i < POOL_COUNT; i++) {
+        uint8_t *buf = s_pool[i];
+        xQueueSend(s_free_queue, &buf, 0);
+    }
+    ESP_LOGI(TAG, "Buffer Pool: %d x %dKB = %dKB",
+             POOL_COUNT, POOL_BUF_SIZE / 1024, POOL_COUNT * POOL_BUF_SIZE / 1024);
 
     // 模块初始化
     display_init();
@@ -280,11 +316,13 @@ void app_main(void)
     mqtt_init();
     http_stream_start(HTTP_STREAM_PORT);
 
-    // Core 1: 上传任务
-    xTaskCreatePinnedToCore(upload_task, "upload", 4096,
-                            NULL, 3, NULL, 1);
+    ESP_LOGI(TAG, "视频流: http://<IP>:%d", HTTP_STREAM_PORT);
 
-    // Core 0: 主任务 (大栈，JPEG 解码需要)
-    xTaskCreatePinnedToCore(main_task, "main", TASK_STACK_SIZE * 4,
-                            NULL, TASK_PRIORITY, NULL, 0);
+    // Core 0: 采集（高优先级，不阻塞）
+    xTaskCreatePinnedToCore(capture_task, "capture", 4096,
+                            NULL, 5, NULL, 0);
+
+    // Core 1: 处理（解码+检测+显示+上传）
+    xTaskCreatePinnedToCore(process_task, "process", TASK_STACK_SIZE * 4,
+                            NULL, TASK_PRIORITY, NULL, 1);
 }
