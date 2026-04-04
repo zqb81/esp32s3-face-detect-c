@@ -89,7 +89,7 @@ esp_err_t camera_jpeg_to_rgb565(const uint8_t *jpeg_data, size_t jpeg_len,
         .out_format = JPEG_IMAGE_FORMAT_RGB565,
         .out_scale = JPEG_IMAGE_SCALE_0,
         .flags = {
-            .swap_color_bytes = 0,
+            .swap_color_bytes = 1,
         }
     };
 
