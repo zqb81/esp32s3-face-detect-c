@@ -37,7 +37,8 @@ static const char *TAG = "main";
 #define POOL_COUNT      4           // 预分配 4 个 buffer
 #define POOL_BUF_SIZE   (100 * 1024) // 每个 100KB (QVGA JPEG 通常 <30KB)
 
-static uint8_t s_pool[POOL_COUNT][POOL_BUF_SIZE] __attribute__((aligned(16)));
+// PSRAM 分配，不在内部 DRAM
+static uint8_t *s_pool[POOL_COUNT] = {NULL};
 static QueueHandle_t s_free_queue = NULL;   // 空闲 buffer 指针队列
 static QueueHandle_t s_work_queue = NULL;   // 待处理 buffer 指针队列
 
@@ -301,10 +302,13 @@ void app_main(void)
     s_free_queue = xQueueCreate(POOL_COUNT, sizeof(uint8_t *));
     s_work_queue = xQueueCreate(POOL_COUNT, sizeof(frame_msg_t));
 
-    // 所有 buffer 放入空闲队列
+    // 从 PSRAM 分配 buffer，放入空闲队列
     for (int i = 0; i < POOL_COUNT; i++) {
-        uint8_t *buf = s_pool[i];
-        xQueueSend(s_free_queue, &buf, 0);
+        s_pool[i] = heap_caps_malloc(POOL_BUF_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_pool[i]) {
+            ESP_LOGE(TAG, "Pool buffer %d 分配失败", i);
+        }
+        xQueueSend(s_free_queue, &s_pool[i], 0);
     }
     ESP_LOGI(TAG, "Buffer Pool: %d x %dKB = %dKB",
              POOL_COUNT, POOL_BUF_SIZE / 1024, POOL_COUNT * POOL_BUF_SIZE / 1024);
