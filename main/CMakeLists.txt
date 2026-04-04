@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "main.c" "camera.c" "display.c" "face_detect.c" "mqtt_comm.c" "http_stream.c"
+    SRCS "main.c" "camera.c" "display.c" "face_detect.cpp" "mqtt_comm.c" "http_stream.c"
     INCLUDE_DIRS "."
     REQUIRES
         esp_wifi

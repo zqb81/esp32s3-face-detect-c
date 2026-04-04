@@ -5,6 +5,10 @@
 #ifndef FACE_DETECT_H
 #define FACE_DETECT_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include "esp_err.h"
 #include <stdint.h>
 #include <stdbool.h>
@@ -49,5 +53,9 @@ void face_detect_free(face_list_t *results);
  * 反初始化
  */
 void face_detect_deinit(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // FACE_DETECT_H
