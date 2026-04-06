@@ -4,3 +4,7 @@ cmake_minimum_required(VERSION 3.16)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(esp32s3_face_detect)
+
+# 将 main/models 下内容打包到名为 `model` 的 SPIFFS 分区镜像（见 partitions.csv）
+# 这样 `scrfd_face_detect.espdl` 会随固件一起烧录到 `model` 分区
+spiffs_create_partition_image(model "main/models" FLASH_IN_PROJECT)
