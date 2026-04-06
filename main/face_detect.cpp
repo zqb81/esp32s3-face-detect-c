@@ -11,10 +11,25 @@
 
 // esp-dl headers
 #include "dl_detect_base.hpp"
+#include "dl_detect_postprocessor.hpp"
 #include "dl_detect_mnp_postprocessor.hpp"
 #include "dl_image_define.hpp"
 #include "dl_model_base.hpp"
 #include "dl_image_preprocessor.hpp"
+#include <vector>
+#include <array>
+
+class FaceDetectImpl : public dl::detect::DetectImpl {
+public:
+    FaceDetectImpl(dl::Model *model,
+                   dl::image::ImagePreprocessor *pre,
+                   dl::detect::DetectPostprocessor *post)
+    {
+        m_model = model;
+        m_image_preprocessor = pre;
+        m_postprocessor = post;
+    }
+};
 
 static const char *TAG = "face_detect";
 
@@ -31,30 +46,25 @@ esp_err_t face_detect_init(void)
     // 文件名固定为 scrfd_face_detect.espdl
     const char *model_path = "/model/scrfd_face_detect.espdl";
 
-    // 使用 esp-dl 的文件构造器
-    try {
-        s_model = new dl::Model(model_path);
-        s_model->build(0, dl::MEMORY_MANAGER_GREEDY);
+    // 使用 esp-dl 的文件构造器（从 /model 加载）
+    s_model = new dl::Model(model_path);
+    s_model->minimize();
 
-        // 典型 SCRFD 输入为 320x240（与 CAM_W/CAM_H 一致）
-        s_pre = new dl::image::ImagePreprocessor(CAM_W, CAM_H,
-                    dl::image::DL_IMAGE_PIX_TYPE_RGB565LE,
-                    dl::image::DL_IMAGE_RESIZE_LINEAR,
-                    dl::image::DL_IMAGE_COLOR_MODE_RGB);
+    // 典型 SCRFD 输入为 320x240（与 CAM_W/CAM_H 一致）
+    s_pre = new dl::image::ImagePreprocessor(s_model, {0, 0, 0}, {1, 1, 1}, true);
 
-        // MNP 后处理参数：score_thr, nms_thr, top_k, stages
-        static const int stages[] = {8, 16, 32};
-        s_post = new dl::detect::MNPPostprocessor(s_model, s_pre,
-                    0.5f, 0.45f, 50, stages);
+    // MNP 后处理参数：score_thr, nms_thr, top_k, stages (anchor_box_stage_t)
+    std::vector<dl::detect::anchor_box_stage_t> stages = {
+        {1, 1, 0, 0, {{48, 48}}}
+    };
+    s_post = new dl::detect::MNPPostprocessor(s_model, s_pre,
+                0.5f, 0.45f, 50, stages);
 
-        s_detector = new dl::detect::DetectImpl(s_model, s_pre, s_post);
-        s_detector->set_score_thr(0.5f);
-        s_detector->set_nms_thr(0.45f);
-        ESP_LOGI(TAG, "SCRFD 模型加载成功: %s", model_path);
-    } catch (...) {
-        ESP_LOGE(TAG, "SCRFD 模型加载失败（检查 /model/scrfd_face_detect.espdl 是否存在）");
-        return ESP_FAIL;
-    }
+    // 使用 DetectImpl（自定义子类绑定内部指针）
+    s_detector = new FaceDetectImpl(s_model, s_pre, s_post);
+    s_detector->set_score_thr(0.5f, 0);
+    s_detector->set_nms_thr(0.45f, 0);
+    ESP_LOGI(TAG, "SCRFD 模型加载成功: %s", model_path);
 
     return ESP_OK;
 }
@@ -73,6 +83,7 @@ esp_err_t face_detect_run(const uint8_t *rgb565_buf, int width, int height,
         .pix_type = dl::image::DL_IMAGE_PIX_TYPE_RGB565LE,
     };
 
+    // detect
     std::list<dl::detect::result_t> &det_results = s_detector->run(img);
 
     if (!det_results.empty()) {

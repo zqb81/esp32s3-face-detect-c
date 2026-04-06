@@ -2,6 +2,9 @@
 # ESP-IDF 5.x / esp-dl + SCRFD
 cmake_minimum_required(VERSION 3.16)
 
+# 排除不需要的测试组件，避免 unity 构建
+set(EXCLUDE_COMPONENTS unity idf_test)
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(esp32s3_face_detect)
 
