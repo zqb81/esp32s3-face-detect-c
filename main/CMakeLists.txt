@@ -12,5 +12,6 @@ idf_component_register(
         esp_http_client
         json
         driver
+        spiffs
     # esp32-camera, esp-dl 通过 idf_component.yml 管理
 )
