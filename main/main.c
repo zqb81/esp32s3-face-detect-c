@@ -23,6 +23,7 @@
 #include "esp_wifi.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
+#include "esp_spiffs.h"
 
 #include "config.h"
 #include "camera.h"
@@ -81,6 +82,25 @@ static void wifi_init(void)
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
     ESP_LOGW(TAG, "WiFi 连接超时");
+}
+
+// ===== 模型 SPIFFS 分区挂载 =====
+static void model_fs_mount(void)
+{
+    esp_vfs_spiffs_conf_t conf = {
+        .base_path = "/model",
+        .partition_label = "model",
+        .max_files = 3,
+        .format_if_mount_failed = false,
+    };
+    esp_err_t ret = esp_vfs_spiffs_register(&conf);
+    if (ret == ESP_OK) {
+        size_t total = 0, used = 0;
+        esp_spiffs_info("model", &total, &used);
+        ESP_LOGI(TAG, "模型分区挂载成功: /model (used %u / %u)", (unsigned)used, (unsigned)total);
+    } else {
+        ESP_LOGW(TAG, "模型分区挂载失败: %s", esp_err_to_name(ret));
+    }
 }
 
 // ===== 下采样 RGB565 → TFT =====
@@ -294,6 +314,9 @@ void app_main(void)
         nvs_flash_erase();
         nvs_flash_init();
     }
+
+    // 挂载模型 SPIFFS 分区 (label: model → /model)
+    model_fs_mount();
 
     // WiFi
     wifi_init();
