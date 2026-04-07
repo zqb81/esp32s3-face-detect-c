@@ -1,24 +1,27 @@
 /**
- * HTTP MJPEG 视频流 + 云端上传
+ * HTTP MJPEG stream + remote upload.
  */
 
 #include "http_stream.h"
 #include "config.h"
-#include "esp_log.h"
-#include "esp_http_server.h"
-#include "esp_http_client.h"
+
 #include "esp_heap_caps.h"
+#include "esp_http_client.h"
+#include "esp_http_server.h"
+#include "esp_log.h"
+#include "esp_timer.h"
+
 #include <string.h>
 
 static const char *TAG = "http";
 static httpd_handle_t s_server = NULL;
 
-// stream buffer (copy latest jpeg to keep valid after caller frees)
 static uint8_t *s_stream_buf = NULL;
 static size_t s_stream_cap = 0;
 static size_t s_stream_len = 0;
+static int64_t s_last_upload_us = 0;
+static int64_t s_last_upload_log_us = 0;
 
-// ===== 播放页面 =====
 static const char index_html[] =
     "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n"
     "<!DOCTYPE html><html><head><meta charset='utf-8'>"
@@ -44,7 +47,9 @@ static esp_err_t stream_handler(httpd_req_t *req)
     char hdr[128];
 
     res = httpd_resp_set_type(req, "multipart/x-mixed-replace; boundary=frame");
-    if (res != ESP_OK) return res;
+    if (res != ESP_OK) {
+        return res;
+    }
 
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
 
@@ -54,17 +59,22 @@ static esp_err_t stream_handler(httpd_req_t *req)
             continue;
         }
 
-        int hdr_len = snprintf(hdr, sizeof(hdr),
-            "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %zu\r\n\r\n",
-            s_stream_len);
+        int hdr_len = snprintf(
+            hdr, sizeof(hdr), "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %zu\r\n\r\n", s_stream_len);
         res = httpd_resp_send_chunk(req, hdr, hdr_len);
-        if (res != ESP_OK) break;
+        if (res != ESP_OK) {
+            break;
+        }
 
         res = httpd_resp_send_chunk(req, (const char *)s_stream_buf, s_stream_len);
-        if (res != ESP_OK) break;
+        if (res != ESP_OK) {
+            break;
+        }
 
         res = httpd_resp_send_chunk(req, "\r\n", 2);
-        if (res != ESP_OK) break;
+        if (res != ESP_OK) {
+            break;
+        }
 
         vTaskDelay(pdMS_TO_TICKS(33));
     }
@@ -80,7 +90,7 @@ esp_err_t http_stream_start(int port)
     config.stack_size = 8192;
 
     if (httpd_start(&s_server, &config) != ESP_OK) {
-        ESP_LOGE(TAG, "HTTP 服务器启动失败");
+        ESP_LOGE(TAG, "HTTP server start failed");
         return ESP_FAIL;
     }
 
@@ -100,28 +110,28 @@ esp_err_t http_stream_start(int port)
     };
     httpd_register_uri_handler(s_server, &stream_uri);
 
-    ESP_LOGI(TAG, "HTTP 流: http://0.0.0.0:%d", port);
+    ESP_LOGI(TAG, "HTTP stream: http://0.0.0.0:%d", port);
     return ESP_OK;
 }
 
 void http_stream_update_frame(const uint8_t *jpeg_data, size_t len)
 {
-    if (!jpeg_data || len == 0) return;
+    if (!jpeg_data || len == 0) {
+        return;
+    }
 
     if (len > s_stream_cap) {
-        // (re)alloc stream buffer in PSRAM
-        if (s_stream_buf) {
-            free(s_stream_buf);
-            s_stream_buf = NULL;
-            s_stream_cap = 0;
-        }
+        free(s_stream_buf);
         s_stream_buf = (uint8_t *)heap_caps_malloc(len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!s_stream_buf) {
-            ESP_LOGW(TAG, "stream buffer alloc failed: %zu", len);
+            s_stream_cap = 0;
+            s_stream_len = 0;
+            ESP_LOGW(TAG, "Stream buffer alloc failed: %zu", len);
             return;
         }
         s_stream_cap = len;
     }
+
     memcpy(s_stream_buf, jpeg_data, len);
     s_stream_len = len;
 }
@@ -134,11 +144,16 @@ void http_stream_stop(void)
     }
 }
 
-// ===== 上传到云端 =====
 static const char *UPLOAD_URL = "http://101.33.209.65:8081/upload";
 
 void http_stream_upload(const uint8_t *jpeg_data, size_t len)
 {
+    int64_t now = esp_timer_get_time();
+    if ((now - s_last_upload_us) < 200000) {
+        return;
+    }
+    s_last_upload_us = now;
+
     esp_http_client_config_t cfg = {
         .url = UPLOAD_URL,
         .method = HTTP_METHOD_POST,
@@ -146,13 +161,18 @@ void http_stream_upload(const uint8_t *jpeg_data, size_t len)
     };
 
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
-    if (client) {
-        esp_http_client_set_post_field(client, (const char *)jpeg_data, len);
-        esp_http_client_set_header(client, "Content-Type", "image/jpeg");
-        esp_err_t err = esp_http_client_perform(client);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "上传失败: %s", esp_err_to_name(err));
-        }
-        esp_http_client_cleanup(client);
+    if (!client) {
+        return;
     }
+
+    esp_http_client_set_post_field(client, (const char *)jpeg_data, len);
+    esp_http_client_set_header(client, "Content-Type", "image/jpeg");
+
+    esp_err_t err = esp_http_client_perform(client);
+    if (err != ESP_OK && (now - s_last_upload_log_us) >= 5000000) {
+        ESP_LOGW(TAG, "Upload failed to %s: %s", UPLOAD_URL, esp_err_to_name(err));
+        s_last_upload_log_us = now;
+    }
+
+    esp_http_client_cleanup(client);
 }

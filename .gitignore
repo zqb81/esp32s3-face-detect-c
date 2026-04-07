@@ -1,5 +1,8 @@
 build/
+build-*/
 managed_components/
 sdkconfig
 sdkconfig.old
 dependencies.lock
+.vscode/
+_tmp_espdl_upstream/

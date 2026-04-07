@@ -1,111 +1,119 @@
-# ESP32-S3 人脸检测 (C 版本)
+# ESP32-S3 Face Detect (C / ESP-IDF)
 
-基于 ESP-IDF + esp-dl 的端侧实时人脸检测，C 语言实现。
+ESP32-S3 real-time face detection project based on ESP-IDF and `esp-dl`.
 
-## 硬件
+The current implementation uses the official `esp-dl` two-stage human face detector:
 
-| 组件 | 型号 |
+- `face_msr.espdl`
+- `face_mnp.espdl`
+
+These models are packed into a single raw partition image during build and flashed to the `model` partition.
+
+## Hardware
+
+| Part | Model |
 |------|------|
-| 主控 | ESP32-S3-WROOM-1 N16R8 |
-| 摄像头 | OV5640 |
-| 屏幕 | ST7735 1.8寸 TFT (128×160) |
+| MCU | ESP32-S3-WROOM-1 N16R8 |
+| Camera | OV5640 |
+| Display | ST7735 1.8" TFT (128x160) |
 
-## 架构
+## Architecture
 
+```text
+Camera (QVGA JPEG)
+  -> buffer pool copy on Core 0
+  -> JPEG decode on Core 1
+  -> esp-dl face detect (MSR + MNP)
+  -> TFT display overlay
+  -> MQTT result / crop upload
+  -> HTTP upload to remote service
 ```
-摄像头 (QVGA RGB565)
-    ├── esp-dl SCRFD 人脸检测（模型位于 SPIFFS 分区 /model）
-    ├── TFT 显示 (下采样 + 人脸框)
-    ├── MQTT 上报检测结果 + 人脸裁剪
-    └── HTTP MJPEG 视频流 (端口 81)
-```
 
-## 模块
+## Key Files
 
-| 文件 | 功能 |
+| File | Purpose |
 |------|------|
-| `main.c` | 入口 + WiFi + 主循环 + 挂载 SPIFFS:model 分区 |
-| `camera.c/h` | OV5640 摄像头驱动 (esp32-camera) |
-| `display.c/h` | ST7735 TFT SPI 驱动 |
-| `face_detect.cpp/h` | esp-dl SCRFD 加载/预处理/后处理/推理 |
-| `mqtt_comm.c/h` | MQTT 检测结果 + 人脸上传 |
-| `http_stream.c/h` | HTTP MJPEG 视频流 |
-| `config.h` | 全局引脚和参数配置 |
+| `main/main.c` | App entry, Wi-Fi, task scheduling, buffer pool |
+| `main/camera.c` | OV5640 driver |
+| `main/display.c` | ST7735 display driver |
+| `main/face_detect.cpp` | `esp-dl` face detection wrapper |
+| `main/http_stream.c` | Local HTTP server and remote JPEG upload |
+| `main/mqtt_comm.c` | MQTT face result and crop upload |
+| `main/config.h` | Pins and runtime configuration |
 
-## 构建与烧录
+## Models
+
+The project now uses the official ESP32-S3-compatible human face detection models:
+
+- `main/models/face_msr.espdl`
+- `main/models/face_mnp.espdl`
+
+At build time, the top-level `CMakeLists.txt` runs:
+
+- `managed_components/espressif__esp-dl/fbs_loader/pack_espdl_models.py`
+
+This generates a packed blob such as:
+
+- `build-codex/face_models.espdl`
+
+That blob is flashed directly to the `model` partition defined in `partitions.csv` at `0x310000`.
+
+Important: this is not a SPIFFS-mounted model filesystem. `esp-dl` loads the models from the raw flash partition.
+
+## Build
+
+Typical ESP-IDF flow:
 
 ```bash
-# 1) 设置 ESP-IDF 环境
-. $HOME/esp/esp-idf/export.sh
-
-# 2) 选择目标 & 构建
 idf.py set-target esp32s3
 idf.py build
-
-# 3) 烧录 + 串口监视
-idf.py -p /dev/ttyUSB0 flash monitor
 ```
 
-注意：顶层 CMake 已启用
+For this repository, flashing the firmware also flashes the packed model partition automatically.
 
-- 将 `main/models/` 打包为名为 `model` 的 SPIFFS 分区镜像（见 partitions.csv）
-- 烧录时固件会自动连带烧写该分区
+## Flash
 
-## 依赖
+```bash
+idf.py -p <PORT> flash monitor
+```
 
-- ESP-IDF 5.x+
-- [esp32-camera](https://github.com/espressif/esp32-camera)
-- [esp-dl](https://github.com/espressif/esp-dl)
+On the Windows environment used for validation, the working command pattern was:
 
-通过 `main/idf_component.yml` 自动拉取依赖；`main/CMakeLists.txt` 已添加 `spiffs` 组件。
+```powershell
+python <IDF_PATH>\tools\idf.py -B build-codex -p COM8 flash
+```
 
-## 功能
+## Verified State
 
-- [x] 摄像头采集 QVGA RGB565
-- [x] TFT ST7735 SPI 显示
-- [x] WiFi STA 连接
-- [x] MQTT 检测结果上报
-- [x] MQTT 人脸裁剪上传
-- [x] HTTP MJPEG 视频流（默认端口 81）
-- [x] esp-dl SCRFD 人脸检测（从 `/model` 加载 `.espdl`）
-- [ ] JPEG 硬件编码
-- [ ] NTP 时间同步
+The latest verified flash completed successfully with:
 
-## 📥 模型获取与放置（必读）
+- app flashed to `0x10000`
+- packed face models flashed to `0x310000`
 
-- 模型文件名：`scrfd_face_detect.espdl`
-- 放置路径：`main/models/scrfd_face_detect.espdl`
-- 运行时读取路径：`/model/scrfd_face_detect.espdl`（SPIFFS 分区挂载在 `/model`）
+Serial logs confirmed that the old `Unsupported format` model error is gone. The current successful model-load signal is that `dl::Model: Minimize()` warnings appear twice during startup, once per model.
 
-获取方式详见 `main/models/README.md`，常用路径：
-- 方式1：从 esp-dl 示例获取预编译 `.espdl`
-- 方式2：下载 SCRFD onnx（如 `scrfd_500m_bnkps.onnx`）并使用 `esp-dl` 转换：
-  ```bash
-  python3 -m pip install esp-dl
-  python3 -m esp_dl.convert --model scrfd_500m_bnkps.onnx --output scrfd_face_detect.espdl
-  ```
-- 方式3：使用社区已转换的 `.espdl`（注意尺寸与兼容性）
+## Runtime Notes
 
-放入 `main/models/` 后执行 `idf.py build && idf.py flash` 即可随固件一起烧录到 `model` 分区。
+- Face model loading is fixed and working.
+- The remote upload target `http://101.33.209.65:8081/upload` still intermittently fails with connection reset / connect errors.
+- Upload failure logs are rate-limited to reduce log spam.
 
-## 运行与日志
+## Features
 
-- 串口启动日志可见：
-  - `模型分区挂载成功: /model ...`
-  - `SCRFD 模型加载成功: /model/scrfd_face_detect.espdl`
-- 视频流：`http://<设备IP>:81`
-- MQTT：`MQTT_BROKER` 等参数见 `config.h`
+- [x] OV5640 camera capture
+- [x] ST7735 display output
+- [x] Wi-Fi STA mode
+- [x] MQTT face result upload
+- [x] MQTT face crop upload
+- [x] Official `esp-dl` MSR + MNP face detection
+- [x] Automatic model partition packing and flashing
+- [ ] Stable remote HTTP upload service
+- [ ] Additional runtime diagnostics
 
-## 对比 Python 版本
+## Dependencies
 
-| 特性 | Python (v1.9) | C (本项目) |
-|------|--------------|-----------|
-| 帧率 | ~4.5 FPS | 预计 15+ FPS |
-| 内存占用 | 高 (MicroPython) | 低 |
-| HTTP 视频流 | ❌ | ✅ |
-| 人脸检测 | espdl 模块 | esp-dl C API |
-| 部署 | 上传 .py | 编译烧录 + SPIFFS 模型 |
+- ESP-IDF 5.4.x
+- `espressif/esp32-camera`
+- `espressif/esp-dl`
 
-## 引脚
-
-见 `config.h`，与 Python 版本一致。
+Dependencies are resolved through `idf_component.yml`.
