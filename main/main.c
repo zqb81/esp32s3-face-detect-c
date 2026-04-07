@@ -235,10 +235,13 @@ static void process_task(void *arg)
 
         last_jpeg_size = msg.len;
 
-        // 1. JPEG → RGB565 解码
+    // 1. JPEG → RGB565 解码
         int out_w = 0, out_h = 0;
         esp_err_t dec_ret = camera_jpeg_to_rgb565(msg.data, msg.len,
                                                    rgb_buf, &out_w, &out_h);
+
+        // 1.5 更新本地 MJPEG 流（复制到 stream buffer）
+        http_stream_update_frame(msg.data, msg.len);
 
         // 2. 上传到云端
         http_stream_upload(msg.data, msg.len);

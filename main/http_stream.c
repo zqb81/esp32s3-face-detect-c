@@ -7,12 +7,16 @@
 #include "esp_log.h"
 #include "esp_http_server.h"
 #include "esp_http_client.h"
+#include "esp_heap_caps.h"
 #include <string.h>
 
 static const char *TAG = "http";
 static httpd_handle_t s_server = NULL;
-static const uint8_t *s_latest_jpeg = NULL;
-static size_t s_jpeg_len = 0;
+
+// stream buffer (copy latest jpeg to keep valid after caller frees)
+static uint8_t *s_stream_buf = NULL;
+static size_t s_stream_cap = 0;
+static size_t s_stream_len = 0;
 
 // ===== 播放页面 =====
 static const char index_html[] =
@@ -45,18 +49,18 @@ static esp_err_t stream_handler(httpd_req_t *req)
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
 
     while (1) {
-        if (!s_latest_jpeg || s_jpeg_len == 0) {
+        if (!s_stream_buf || s_stream_len == 0) {
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
 
         int hdr_len = snprintf(hdr, sizeof(hdr),
             "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %zu\r\n\r\n",
-            s_jpeg_len);
+            s_stream_len);
         res = httpd_resp_send_chunk(req, hdr, hdr_len);
         if (res != ESP_OK) break;
 
-        res = httpd_resp_send_chunk(req, (const char *)s_latest_jpeg, s_jpeg_len);
+        res = httpd_resp_send_chunk(req, (const char *)s_stream_buf, s_stream_len);
         if (res != ESP_OK) break;
 
         res = httpd_resp_send_chunk(req, "\r\n", 2);
@@ -102,8 +106,24 @@ esp_err_t http_stream_start(int port)
 
 void http_stream_update_frame(const uint8_t *jpeg_data, size_t len)
 {
-    s_latest_jpeg = jpeg_data;
-    s_jpeg_len = len;
+    if (!jpeg_data || len == 0) return;
+
+    if (len > s_stream_cap) {
+        // (re)alloc stream buffer in PSRAM
+        if (s_stream_buf) {
+            free(s_stream_buf);
+            s_stream_buf = NULL;
+            s_stream_cap = 0;
+        }
+        s_stream_buf = (uint8_t *)heap_caps_malloc(len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_stream_buf) {
+            ESP_LOGW(TAG, "stream buffer alloc failed: %zu", len);
+            return;
+        }
+        s_stream_cap = len;
+    }
+    memcpy(s_stream_buf, jpeg_data, len);
+    s_stream_len = len;
 }
 
 void http_stream_stop(void)
