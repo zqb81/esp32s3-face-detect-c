@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32-S3 人脸检测</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            min-height: 100vh;
+        }
+        .header {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            padding: 20px;
+            border-bottom: 1px solid #334155;
+        }
+        .header h1 { font-size: 24px; font-weight: 600; color: #f1f5f9; }
+        .header .subtitle { color: #94a3b8; font-size: 14px; margin-top: 4px; }
+        .status-indicator { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; animation: pulse 2s infinite; }
+        .status-indicator.connected { background: #22c55e; }
+        .status-indicator.disconnected { background: #ef4444; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+        .stat-card { background: #1e293b; border-radius: 12px; padding: 20px; border: 1px solid #334155; }
+        .stat-card .label { color: #94a3b8; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .stat-card .value { font-size: 32px; font-weight: 700; color: #f1f5f9; margin-top: 4px; }
+        .stat-card .sub { color: #64748b; font-size: 12px; margin-top: 4px; }
+        .main-content { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 20px; }
+        .panel { background: #1e293b; border-radius: 12px; border: 1px solid #334155; overflow: hidden; }
+        .panel-header { padding: 16px 20px; border-bottom: 1px solid #334155; font-weight: 600; color: #f1f5f9; display: flex; justify-content: space-between; align-items: center; }
+        .panel-body { max-height: 600px; overflow-y: auto; }
+
+        .video-panel { background:#0b1324; border:1px solid #334155; border-radius:12px; overflow:hidden; }
+        .video-header { padding:12px 16px; border-bottom:1px solid #334155; font-weight:600; }
+        .video-wrap { position:relative; }
+        .video-wrap img { width:100%; display:block; }
+        .video-tip { font-size:12px; color:#94a3b8; padding:8px 16px; }
+
+        .faces-panel { margin-top: 16px; }
+        .faces-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; padding: 16px; }
+        .face-card { background: #0f172a; border-radius: 8px; overflow: hidden; text-align: center; transition: transform 0.2s; }
+        .face-card:hover { transform: scale(1.05); }
+        .face-card img { width: 100%; height: 120px; object-fit: cover; }
+        .face-card .info { padding: 8px; font-size: 11px; }
+        .face-card .score { color: #22c55e; font-weight: 600; }
+        .detection-item { padding: 16px 20px; border-bottom: 1px solid #334155; transition: background 0.2s; }
+        .detection-item:hover { background: #334155; }
+        .detection-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        .detection-time { color: #94a3b8; font-size: 12px; }
+        .face-count { background: #3b82f6; color: white; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+        .face-box { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+        .face-tag { background: #0f172a; padding: 6px 10px; border-radius: 6px; font-size: 12px; }
+        .face-tag .score { color: #22c55e; font-weight: 600; }
+        .new-detection { animation: slideIn 0.3s ease; }
+        @keyframes slideIn { from { opacity: 0; transform: translateY(-10px);} to { opacity: 1; transform: translateY(0);} }
+        .device-info { color: #64748b; font-size: 11px; }
+        @media (max-width: 900px) { .main-content { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>ESP32-S3 人脸检测</h1>
+        <div class="subtitle">
+            <span class="status-indicator disconnected" id="statusDot"></span>
+            <span id="statusText">等待连接...</span>
+            <span id="deviceStatus" style="margin-left:12px;color:#94a3b8;font-size:12px;">设备：未知</span>
+            <span id="appVersion" style="margin-left:12px;color:#64748b;font-size:12px;"></span>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="stats-grid">
+            <div class="stat-card"><div class="label">累计检测</div><div class="value" id="totalDetections">0</div><div class="sub">次</div></div>
+            <div class="stat-card"><div class="label">累计人脸</div><div class="value" id="totalFaces">0</div><div class="sub">张</div></div>
+            <div class="stat-card"><div class="label">在线设备</div><div class="value" id="devicesOnline">0</div><div class="sub">台</div></div>
+            <div class="stat-card"><div class="label">设备数量</div><div class="value" id="devices">0</div><div class="sub">台</div></div>
+            <div class="stat-card"><div class="label">最近检测</div><div class="value" style="font-size: 14px;" id="lastDetection">无</div><div class="sub">时间</div></div>
+        </div>
+
+        <div class="main-content">
+            <div>
+                <div class="video-panel">
+                    <div class="video-header">实时视频流（中转 8081）</div>
+                    <div class="video-wrap">
+                        <img id="relay" src="http://101.33.209.65:8081/stream" alt="stream" />
+                    </div>
+                    <div class="video-tip">若无画面，请检查 ESP32 上传或中转服务。</div>
+                </div>
+
+                <div class="panel faces-panel">
+                    <div class="panel-header">最近人脸</div>
+                    <div class="faces-grid" id="facesGrid"></div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-header">实时检测记录</div>
+                <div class="panel-body" id="detectionsList"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+        const totalDetections = document.getElementById('totalDetections');
+        const totalFaces = document.getElementById('totalFaces');
+        const devicesOnline = document.getElementById('devicesOnline');
+        const deviceStatus = document.getElementById('deviceStatus');
+        const appVersion = document.getElementById('appVersion');
+        const detectionsList = document.getElementById('detectionsList');
+        const facesGrid = document.getElementById('facesGrid');
+
+        async function updateStats() {
+            const res = await fetch('/api/stats');
+            const data = await res.json();
+            totalDetections.textContent = data.total_detections;
+            totalFaces.textContent = data.total_faces;
+            devices.textContent = data.devices;
+            devicesOnline.textContent = data.devices_online ?? 0;
+            lastDetection.textContent = data.last_detection;
+            if (data.app_version) appVersion.textContent = `v${data.app_version}`;
+
+            if ((data.devices_online ?? 0) > 0) {
+                deviceStatus.textContent = '设备：已连接';
+                deviceStatus.style.color = '#22c55e';
+            } else {
+                deviceStatus.textContent = '设备：未连接';
+                deviceStatus.style.color = '#ef4444';
+            }
+        }
+
+        async function loadDetections() {
+            const res = await fetch('/api/detections?limit=30');
+            const data = await res.json();
+            detectionsList.innerHTML = '';
+            data.forEach(addDetection);
+        }
+
+        async function loadFaces() {
+            const res = await fetch('/api/face_images?limit=24');
+            const data = await res.json();
+            facesGrid.innerHTML = '';
+            data.forEach(addFace);
+        }
+
+        function addFace(face) {
+            const div = document.createElement('div');
+            div.className = 'face-card';
+            div.innerHTML = `
+                <img src="/api/face_image/${face.id}" />
+                <div class="info">
+                    <div class="score">${(face.score*100).toFixed(1)}%</div>
+                    <div>${face.datetime}</div>
+                </div>
+            `;
+            facesGrid.prepend(div);
+            if (facesGrid.children.length > 24) facesGrid.removeChild(facesGrid.lastChild);
+        }
+
+        function addDetection(det) {
+            const div = document.createElement('div');
+            div.className = 'detection-item new-detection';
+            div.innerHTML = `
+                <div class="detection-header">
+                    <div>
+                        <div class="detection-time">${det.datetime}</div>
+                        <div class="device-info">设备: ${det.device} | 帧: ${det.frame}</div>
+                    </div>
+                    <div class="face-count">${det.face_count} 张</div>
+                </div>
+                <div class="face-box">
+                    ${det.faces.map(f => `<span class="face-tag">置信度 <span class="score">${(f.score*100).toFixed(1)}%</span></span>`).join('')}
+                </div>
+            `;
+            detectionsList.prepend(div);
+            if (detectionsList.children.length > 30) detectionsList.removeChild(detectionsList.lastChild);
+        }
+
+        socket.on('connect', () => {
+            statusDot.classList.remove('disconnected');
+            statusDot.classList.add('connected');
+            statusText.textContent = '已连接';
+        });
+        socket.on('disconnect', () => {
+            statusDot.classList.remove('connected');
+            statusDot.classList.add('disconnected');
+            statusText.textContent = '已断开';
+        });
+        socket.on('new_detection', addDetection);
+        socket.on('new_face_image', addFace);
+
+        updateStats();
+        loadDetections();
+        loadFaces();
+        setInterval(updateStats, 5000);
+    </script>
+</body>
+</html>
