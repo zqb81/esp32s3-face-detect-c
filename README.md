@@ -1,13 +1,13 @@
-# ESP32-S3 Face Detect (C / ESP-IDF)
+# ESP32-S3 Face Detect
 
 ESP32-S3 real-time face detection project based on ESP-IDF and `esp-dl`.
 
-The current implementation uses the official `esp-dl` two-stage human face detector:
+The current firmware uses the official two-stage `esp-dl` human face detector:
 
 - `face_msr.espdl`
 - `face_mnp.espdl`
 
-These models are packed into a single raw partition image during build and flashed to the `model` partition.
+Those models are packed into a single raw partition image during build and flashed to the `model` partition.
 
 ## Hardware
 
@@ -26,24 +26,26 @@ Camera (QVGA JPEG)
   -> esp-dl face detect (MSR + MNP)
   -> TFT display overlay
   -> MQTT result / crop upload
-  -> HTTP upload to remote service
+  -> HTTP upload to unified web service
 ```
 
 ## Key Files
 
 | File | Purpose |
 |------|------|
-| `main/main.c` | App entry, Wi-Fi, task scheduling, buffer pool |
+| `main/main.c` | App entry, Wi-Fi, task scheduling, frame processing |
 | `main/camera.c` | OV5640 driver |
 | `main/display.c` | ST7735 display driver |
 | `main/face_detect.cpp` | `esp-dl` face detection wrapper |
-| `main/http_stream.c` | Local HTTP server and remote JPEG upload |
+| `main/http_stream.c` | Device-side local MJPEG server and remote JPEG upload |
 | `main/mqtt_comm.c` | MQTT face result and crop upload |
 | `main/config.h` | Pins and runtime configuration |
+| `web/app.py` | Unified web service: upload endpoint, dashboard, MJPEG streams |
+| `web/templates/index.html` | Dashboard UI with frontend and server-side face boxes |
 
 ## Models
 
-The project now uses the official ESP32-S3-compatible human face detection models:
+The project uses the official ESP32-S3-compatible human face detection models:
 
 - `main/models/face_msr.espdl`
 - `main/models/face_mnp.espdl`
@@ -83,6 +85,39 @@ On the Windows environment used for validation, the working command pattern was:
 python <IDF_PATH>\tools\idf.py -B build-codex -p COM8 flash
 ```
 
+## Web Service
+
+The `web/` directory contains the cloud-side service used by the device.
+
+Install and run:
+
+```bash
+cd web
+python3 -m pip install -r requirements.txt
+python3 app.py
+```
+
+Default port:
+
+- dashboard and upload API: `8082`
+
+Available endpoints:
+
+- `GET /` dashboard
+- `POST /upload` latest JPEG frame upload from ESP32
+- `GET /stream` raw MJPEG stream
+- `GET /stream_boxed` server-rendered MJPEG stream with face boxes
+- `GET /api/detections` recent MQTT detection history
+- `GET /api/face_images` recent face crop list
+
+Dashboard behavior:
+
+- Frontend overlay view draws face boxes in the browser from MQTT detection data
+- Server-rendered boxed stream draws face boxes on the server for comparison/debugging
+- Face crop gallery shows the latest MQTT face crops
+
+`web/video_relay.py` is kept only as a deprecated compatibility stub. New deployments should run `web/app.py`.
+
 ## Verified State
 
 The latest verified flash completed successfully with:
@@ -95,7 +130,10 @@ Serial logs confirmed that the old `Unsupported format` model error is gone. The
 ## Runtime Notes
 
 - Face model loading is fixed and working.
-- The remote upload target `http://101.33.209.65:8081/upload` still intermittently fails with connection reset / connect errors.
+- The ESP32 uploads JPEG frames to `http://101.33.209.65:8082/upload`.
+- TFT face boxes are persisted across non-detect frames so the box remains visible.
+- MQTT detection payloads now include `frame`, `img_w`, and `img_h` for accurate cloud overlays.
+- MQTT face crop payloads now include `ts` and `box`.
 - Upload failure logs are rate-limited to reduce log spam.
 
 ## Features
@@ -107,13 +145,23 @@ Serial logs confirmed that the old `Unsupported format` model error is gone. The
 - [x] MQTT face crop upload
 - [x] Official `esp-dl` MSR + MNP face detection
 - [x] Automatic model partition packing and flashing
-- [ ] Stable remote HTTP upload service
+- [x] Unified web upload + dashboard service
+- [x] TFT face box persistence between detection frames
 - [ ] Additional runtime diagnostics
 
 ## Dependencies
+
+Firmware:
 
 - ESP-IDF 5.4.x
 - `espressif/esp32-camera`
 - `espressif/esp-dl`
 
-Dependencies are resolved through `idf_component.yml`.
+Web service:
+
+- Flask
+- Flask-SocketIO
+- paho-mqtt
+- Pillow
+
+Firmware dependencies are resolved through `idf_component.yml`. Web dependencies are listed in `web/requirements.txt`.

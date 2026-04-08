@@ -17,7 +17,7 @@ esp_err_t mqtt_init(void);
 /**
  * 发送检测结果
  */
-esp_err_t mqtt_send_faces(const face_list_t *faces);
+esp_err_t mqtt_send_faces(const face_list_t *faces, int frame, int img_w, int img_h);
 
 /**
  * 发送人脸裁剪图 (base64)

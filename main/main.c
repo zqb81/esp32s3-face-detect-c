@@ -9,6 +9,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
@@ -43,6 +44,23 @@ typedef struct {
     uint8_t *data;
     size_t len;
 } frame_msg_t;
+
+static void face_list_replace(face_list_t *dst, const face_list_t *src)
+{
+    face_detect_free(dst);
+    if (!src || src->count <= 0 || !src->faces) {
+        return;
+    }
+
+    dst->faces = calloc(src->count, sizeof(face_result_t));
+    if (!dst->faces) {
+        return;
+    }
+
+    memcpy(dst->faces, src->faces, src->count * sizeof(face_result_t));
+    dst->count = src->count;
+    dst->capacity = src->count;
+}
 
 static void wifi_init(void)
 {
@@ -201,6 +219,7 @@ static void process_task(void *arg)
     int fps_count = 0;
     int64_t fps_time = esp_timer_get_time();
     int last_jpeg_size = 0;
+    face_list_t last_faces = {0};
 
     while (1) {
         frame_msg_t msg;
@@ -228,7 +247,8 @@ static void process_task(void *arg)
         if (frame % 5 == 0) {
             face_detect_run(rgb_buf, out_w, out_h, &faces);
             if (faces.count > 0) {
-                mqtt_send_faces(&faces);
+                mqtt_send_faces(&faces, frame, out_w, out_h);
+                face_list_replace(&last_faces, &faces);
 
                 const face_result_t *best = &faces.faces[0];
                 for (int i = 1; i < faces.count; i++) {
@@ -240,11 +260,13 @@ static void process_task(void *arg)
                 if (best->score > FACE_SCORE_THRESHOLD) {
                     mqtt_send_face_crop(rgb_buf, out_w, out_h, best);
                 }
+            } else {
+                face_detect_free(&last_faces);
             }
         }
 
-        if (faces.count > 0) {
-            draw_face_boxes(tft_buf, &faces, TFT_WIDTH, TFT_HEIGHT, out_w, out_h);
+        if (last_faces.count > 0) {
+            draw_face_boxes(tft_buf, &last_faces, TFT_WIDTH, TFT_HEIGHT, out_w, out_h);
         }
         display_draw_frame(tft_buf);
         face_detect_free(&faces);

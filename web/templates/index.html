@@ -3,203 +3,551 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ESP32-S3 人脸检测</title>
+    <title>ESP32-S3 人脸检测控制台</title>
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #0f172a;
-            color: #e2e8f0;
             min-height: 100vh;
+            font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+            background:
+                radial-gradient(circle at top left, rgba(16, 185, 129, 0.14), transparent 30%),
+                radial-gradient(circle at top right, rgba(59, 130, 246, 0.16), transparent 28%),
+                linear-gradient(180deg, #07111f, #0f172a 35%, #111827 100%);
+            color: #e5eefc;
         }
-        .header {
-            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-            padding: 20px;
-            border-bottom: 1px solid #334155;
+        .shell {
+            width: min(1440px, calc(100vw - 32px));
+            margin: 0 auto;
+            padding: 24px 0 40px;
         }
-        .header h1 { font-size: 24px; font-weight: 600; color: #f1f5f9; }
-        .header .subtitle { color: #94a3b8; font-size: 14px; margin-top: 4px; }
-        .status-indicator { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; animation: pulse 2s infinite; }
-        .status-indicator.connected { background: #22c55e; }
-        .status-indicator.disconnected { background: #ef4444; }
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
-        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
-        .stat-card { background: #1e293b; border-radius: 12px; padding: 20px; border: 1px solid #334155; }
-        .stat-card .label { color: #94a3b8; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
-        .stat-card .value { font-size: 32px; font-weight: 700; color: #f1f5f9; margin-top: 4px; }
-        .stat-card .sub { color: #64748b; font-size: 12px; margin-top: 4px; }
-        .main-content { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 20px; }
-        .panel { background: #1e293b; border-radius: 12px; border: 1px solid #334155; overflow: hidden; }
-        .panel-header { padding: 16px 20px; border-bottom: 1px solid #334155; font-weight: 600; color: #f1f5f9; display: flex; justify-content: space-between; align-items: center; }
-        .panel-body { max-height: 600px; overflow-y: auto; }
-
-        .video-panel { background:#0b1324; border:1px solid #334155; border-radius:12px; overflow:hidden; }
-        .video-header { padding:12px 16px; border-bottom:1px solid #334155; font-weight:600; }
-        .video-wrap { position:relative; }
-        .video-wrap img { width:100%; display:block; }
-        .video-tip { font-size:12px; color:#94a3b8; padding:8px 16px; }
-
-        .faces-panel { margin-top: 16px; }
-        .faces-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; padding: 16px; }
-        .face-card { background: #0f172a; border-radius: 8px; overflow: hidden; text-align: center; transition: transform 0.2s; }
-        .face-card:hover { transform: scale(1.05); }
-        .face-card img { width: 100%; height: 120px; object-fit: cover; }
-        .face-card .info { padding: 8px; font-size: 11px; }
-        .face-card .score { color: #22c55e; font-weight: 600; }
-        .detection-item { padding: 16px 20px; border-bottom: 1px solid #334155; transition: background 0.2s; }
-        .detection-item:hover { background: #334155; }
-        .detection-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-        .detection-time { color: #94a3b8; font-size: 12px; }
-        .face-count { background: #3b82f6; color: white; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 600; }
-        .face-box { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-        .face-tag { background: #0f172a; padding: 6px 10px; border-radius: 6px; font-size: 12px; }
-        .face-tag .score { color: #22c55e; font-weight: 600; }
-        .new-detection { animation: slideIn 0.3s ease; }
-        @keyframes slideIn { from { opacity: 0; transform: translateY(-10px);} to { opacity: 1; transform: translateY(0);} }
-        .device-info { color: #64748b; font-size: 11px; }
-        @media (max-width: 900px) { .main-content { grid-template-columns: 1fr; } }
+        .hero {
+            display: flex;
+            justify-content: space-between;
+            gap: 20px;
+            align-items: end;
+            padding: 24px;
+            margin-bottom: 20px;
+            border: 1px solid rgba(148, 163, 184, 0.18);
+            border-radius: 24px;
+            background: rgba(15, 23, 42, 0.72);
+            backdrop-filter: blur(18px);
+        }
+        .hero h1 {
+            font-size: clamp(28px, 4vw, 42px);
+            line-height: 1.05;
+            letter-spacing: -0.03em;
+        }
+        .hero p {
+            margin-top: 10px;
+            color: #94a3b8;
+            font-size: 14px;
+        }
+        .status-line {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            flex-wrap: wrap;
+            color: #cbd5e1;
+            font-size: 14px;
+        }
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 14px;
+            border-radius: 999px;
+            background: rgba(30, 41, 59, 0.95);
+            border: 1px solid rgba(148, 163, 184, 0.18);
+        }
+        .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #ef4444;
+            box-shadow: 0 0 16px rgba(239, 68, 68, 0.5);
+        }
+        .dot.connected {
+            background: #22c55e;
+            box-shadow: 0 0 16px rgba(34, 197, 94, 0.55);
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 14px;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            padding: 18px;
+            border-radius: 20px;
+            background: rgba(15, 23, 42, 0.76);
+            border: 1px solid rgba(148, 163, 184, 0.16);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+        }
+        .stat-card .label {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: #94a3b8;
+        }
+        .stat-card .value {
+            margin-top: 6px;
+            font-size: 30px;
+            font-weight: 700;
+        }
+        .layout {
+            display: grid;
+            grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.8fr);
+            gap: 20px;
+        }
+        .column {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .panel {
+            border-radius: 24px;
+            border: 1px solid rgba(148, 163, 184, 0.16);
+            background: rgba(15, 23, 42, 0.78);
+            overflow: hidden;
+        }
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            padding: 16px 18px;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+        }
+        .panel-title {
+            font-size: 15px;
+            font-weight: 700;
+        }
+        .panel-subtitle {
+            color: #94a3b8;
+            font-size: 12px;
+        }
+        .video-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 16px;
+            padding: 18px;
+        }
+        .stream-card {
+            padding: 14px;
+            border-radius: 18px;
+            background: rgba(2, 6, 23, 0.7);
+            border: 1px solid rgba(148, 163, 184, 0.12);
+        }
+        .stream-card h3 {
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+        .stream-card p {
+            margin-top: 10px;
+            color: #94a3b8;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+        .stream-wrap {
+            position: relative;
+            border-radius: 16px;
+            overflow: hidden;
+            background: #020617;
+            aspect-ratio: 4 / 3;
+        }
+        .stream-wrap img,
+        .stream-wrap canvas {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        .stream-wrap canvas {
+            pointer-events: none;
+        }
+        .faces-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 12px;
+            padding: 18px;
+        }
+        .face-card {
+            border-radius: 16px;
+            overflow: hidden;
+            background: rgba(2, 6, 23, 0.82);
+            border: 1px solid rgba(148, 163, 184, 0.08);
+        }
+        .face-card img {
+            width: 100%;
+            height: 120px;
+            object-fit: cover;
+            display: block;
+        }
+        .face-card .info {
+            padding: 10px;
+            font-size: 11px;
+            color: #cbd5e1;
+        }
+        .face-card .score {
+            color: #4ade80;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+        .detections-list {
+            max-height: 920px;
+            overflow-y: auto;
+        }
+        .detection-item {
+            padding: 16px 18px;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+        }
+        .detection-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+        .detection-time {
+            color: #94a3b8;
+            font-size: 12px;
+        }
+        .device-info {
+            margin-top: 4px;
+            color: #64748b;
+            font-size: 12px;
+        }
+        .count-badge {
+            padding: 4px 10px;
+            border-radius: 999px;
+            background: rgba(37, 99, 235, 0.9);
+            color: #eff6ff;
+            font-size: 12px;
+            font-weight: 700;
+        }
+        .face-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 12px;
+        }
+        .face-tag {
+            padding: 7px 10px;
+            border-radius: 12px;
+            background: rgba(2, 6, 23, 0.8);
+            color: #dbeafe;
+            font-size: 12px;
+        }
+        .empty-note {
+            color: #64748b;
+            font-size: 13px;
+            padding: 18px;
+        }
+        @media (max-width: 1100px) {
+            .layout {
+                grid-template-columns: 1fr;
+            }
+        }
+        @media (max-width: 760px) {
+            .shell {
+                width: min(100vw - 20px, 1440px);
+            }
+            .hero {
+                padding: 18px;
+                flex-direction: column;
+                align-items: start;
+            }
+            .video-grid {
+                grid-template-columns: 1fr;
+            }
+        }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h1>ESP32-S3 人脸检测</h1>
-        <div class="subtitle">
-            <span class="status-indicator disconnected" id="statusDot"></span>
-            <span id="statusText">等待连接...</span>
-            <span id="deviceStatus" style="margin-left:12px;color:#94a3b8;font-size:12px;">设备：未知</span>
-            <span id="appVersion" style="margin-left:12px;color:#64748b;font-size:12px;"></span>
-        </div>
-    </div>
-
-    <div class="container">
-        <div class="stats-grid">
-            <div class="stat-card"><div class="label">累计检测</div><div class="value" id="totalDetections">0</div><div class="sub">次</div></div>
-            <div class="stat-card"><div class="label">累计人脸</div><div class="value" id="totalFaces">0</div><div class="sub">张</div></div>
-            <div class="stat-card"><div class="label">在线设备</div><div class="value" id="devicesOnline">0</div><div class="sub">台</div></div>
-            <div class="stat-card"><div class="label">设备数量</div><div class="value" id="devices">0</div><div class="sub">台</div></div>
-            <div class="stat-card"><div class="label">最近检测</div><div class="value" style="font-size: 14px;" id="lastDetection">无</div><div class="sub">时间</div></div>
-        </div>
-
-        <div class="main-content">
+    <div class="shell">
+        <section class="hero">
             <div>
-                <div class="video-panel">
-                    <div class="video-header">实时视频流（中转 8081）</div>
-                    <div class="video-wrap">
-                        <img id="relay" src="http://101.33.209.65:8081/stream" alt="stream" />
+                <h1>ESP32-S3 人脸检测控制台</h1>
+                <p>原始视频、前端叠框、服务端带框流现在共用同一条上传链路，便于定位检测与显示问题。</p>
+            </div>
+            <div class="status-line">
+                <span class="status-pill">
+                    <span class="dot" id="statusDot"></span>
+                    <span id="statusText">等待连接</span>
+                </span>
+                <span class="status-pill" id="deviceStatus">设备状态未知</span>
+                <span class="status-pill" id="appVersion">v-</span>
+            </div>
+        </section>
+
+        <section class="stats-grid">
+            <div class="stat-card"><div class="label">累计检测</div><div class="value" id="totalDetections">0</div></div>
+            <div class="stat-card"><div class="label">累计人脸</div><div class="value" id="totalFaces">0</div></div>
+            <div class="stat-card"><div class="label">在线设备</div><div class="value" id="devicesOnline">0</div></div>
+            <div class="stat-card"><div class="label">设备数量</div><div class="value" id="devices">0</div></div>
+            <div class="stat-card"><div class="label">最近检测</div><div class="value" id="lastDetection" style="font-size:16px;">N/A</div></div>
+        </section>
+
+        <section class="layout">
+            <div class="column">
+                <div class="panel">
+                    <div class="panel-header">
+                        <div>
+                            <div class="panel-title">实时视频</div>
+                            <div class="panel-subtitle">左侧为前端叠框，右侧为服务端生成的带框视频</div>
+                        </div>
                     </div>
-                    <div class="video-tip">若无画面，请检查 ESP32 上传或中转服务。</div>
+                    <div class="video-grid">
+                        <div class="stream-card">
+                            <h3>前端叠框</h3>
+                            <div class="stream-wrap">
+                                <img id="rawStream" src="/stream" alt="raw stream">
+                                <canvas id="overlayCanvas"></canvas>
+                            </div>
+                            <p id="overlayInfo">等待检测结果</p>
+                        </div>
+                        <div class="stream-card">
+                            <h3>服务端带框流</h3>
+                            <div class="stream-wrap">
+                                <img id="boxedStream" src="/stream_boxed" alt="boxed stream">
+                            </div>
+                            <p>服务端使用最新 JPEG 与最新检测框实时合成，便于确认云端渲染结果。</p>
+                        </div>
+                    </div>
                 </div>
 
-                <div class="panel faces-panel">
-                    <div class="panel-header">最近人脸</div>
+                <div class="panel">
+                    <div class="panel-header">
+                        <div>
+                            <div class="panel-title">最近人脸裁剪</div>
+                            <div class="panel-subtitle">来自 MQTT 的高分人脸图块</div>
+                        </div>
+                    </div>
                     <div class="faces-grid" id="facesGrid"></div>
                 </div>
             </div>
 
             <div class="panel">
-                <div class="panel-header">实时检测记录</div>
-                <div class="panel-body" id="detectionsList"></div>
+                <div class="panel-header">
+                    <div>
+                        <div class="panel-title">实时检测记录</div>
+                        <div class="panel-subtitle">最近 30 条 MQTT 检测消息</div>
+                    </div>
+                </div>
+                <div class="detections-list" id="detectionsList"></div>
             </div>
-        </div>
+        </section>
     </div>
 
     <script>
         const socket = io();
-        const statusDot = document.getElementById('statusDot');
-        const statusText = document.getElementById('statusText');
-        const totalDetections = document.getElementById('totalDetections');
-        const totalFaces = document.getElementById('totalFaces');
-        const devicesOnline = document.getElementById('devicesOnline');
-        const deviceStatus = document.getElementById('deviceStatus');
-        const appVersion = document.getElementById('appVersion');
-        const detectionsList = document.getElementById('detectionsList');
-        const facesGrid = document.getElementById('facesGrid');
+        const statusDot = document.getElementById("statusDot");
+        const statusText = document.getElementById("statusText");
+        const deviceStatus = document.getElementById("deviceStatus");
+        const appVersion = document.getElementById("appVersion");
+        const totalDetections = document.getElementById("totalDetections");
+        const totalFaces = document.getElementById("totalFaces");
+        const devicesOnline = document.getElementById("devicesOnline");
+        const devices = document.getElementById("devices");
+        const lastDetection = document.getElementById("lastDetection");
+        const detectionsList = document.getElementById("detectionsList");
+        const facesGrid = document.getElementById("facesGrid");
+        const rawStream = document.getElementById("rawStream");
+        const overlayCanvas = document.getElementById("overlayCanvas");
+        const overlayInfo = document.getElementById("overlayInfo");
+
+        let latestOverlay = null;
+
+        function scoreColor(score) {
+            if (score > 0.8) return "#22c55e";
+            if (score > 0.6) return "#facc15";
+            return "#ef4444";
+        }
+
+        function syncCanvasSize() {
+            const rect = rawStream.getBoundingClientRect();
+            overlayCanvas.width = Math.max(1, Math.round(rect.width));
+            overlayCanvas.height = Math.max(1, Math.round(rect.height));
+            drawOverlay();
+        }
+
+        function drawOverlay() {
+            const ctx = overlayCanvas.getContext("2d");
+            ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+
+            if (!latestOverlay || !Array.isArray(latestOverlay.faces) || latestOverlay.faces.length === 0) {
+                overlayInfo.textContent = "等待检测结果";
+                return;
+            }
+
+            const srcW = latestOverlay.img_w || 320;
+            const srcH = latestOverlay.img_h || 240;
+            const scaleX = overlayCanvas.width / srcW;
+            const scaleY = overlayCanvas.height / srcH;
+
+            ctx.lineWidth = 3;
+            ctx.font = "bold 14px sans-serif";
+            ctx.textBaseline = "top";
+
+            latestOverlay.faces.forEach((face) => {
+                const [x1, y1, x2, y2] = face.box || [0, 0, 0, 0];
+                const color = scoreColor(face.score || 0);
+                const left = x1 * scaleX;
+                const top = y1 * scaleY;
+                const width = (x2 - x1) * scaleX;
+                const height = (y2 - y1) * scaleY;
+
+                ctx.strokeStyle = color;
+                ctx.strokeRect(left, top, width, height);
+
+                const label = `${((face.score || 0) * 100).toFixed(1)}%`;
+                const labelWidth = Math.ceil(ctx.measureText(label).width) + 12;
+                const labelTop = Math.max(0, top - 22);
+                ctx.fillStyle = color;
+                ctx.fillRect(left, labelTop, labelWidth, 20);
+                ctx.fillStyle = "#020617";
+                ctx.fillText(label, left + 6, labelTop + 3);
+            });
+
+            overlayInfo.textContent =
+                `${latestOverlay.device || "unknown"} · frame ${latestOverlay.frame ?? 0} · ${latestOverlay.face_count ?? latestOverlay.faces.length} face(s)`;
+        }
+
+        function addDetection(det) {
+            const item = document.createElement("div");
+            item.className = "detection-item";
+            item.innerHTML = `
+                <div class="detection-head">
+                    <div>
+                        <div class="detection-time">${det.datetime || "N/A"}</div>
+                        <div class="device-info">${det.device || "unknown"} | frame ${det.frame ?? 0}</div>
+                    </div>
+                    <div class="count-badge">${det.face_count || 0} face(s)</div>
+                </div>
+                <div class="face-tags">
+                    ${(det.faces || []).map((face) => `
+                        <span class="face-tag">
+                            score ${(face.score * 100).toFixed(1)}% · [${(face.box || []).join(", ")}]
+                        </span>
+                    `).join("") || '<span class="face-tag">No faces</span>'}
+                </div>
+            `;
+            detectionsList.prepend(item);
+            if (detectionsList.children.length > 30) {
+                detectionsList.removeChild(detectionsList.lastChild);
+            }
+        }
+
+        function addFace(face) {
+            const item = document.createElement("div");
+            item.className = "face-card";
+            item.innerHTML = `
+                <img src="/api/face_image/${face.id}" alt="face crop">
+                <div class="info">
+                    <div class="score">${((face.score || 0) * 100).toFixed(1)}%</div>
+                    <div>${face.datetime || "N/A"}</div>
+                </div>
+            `;
+            facesGrid.prepend(item);
+            if (facesGrid.children.length > 24) {
+                facesGrid.removeChild(facesGrid.lastChild);
+            }
+        }
+
+        function renderDetections(items) {
+            detectionsList.innerHTML = "";
+            if (!items.length) {
+                detectionsList.innerHTML = '<div class="empty-note">还没有检测记录。</div>';
+                return;
+            }
+            items.forEach(addDetection);
+        }
+
+        function renderFaces(items) {
+            facesGrid.innerHTML = "";
+            if (!items.length) {
+                facesGrid.innerHTML = '<div class="empty-note">还没有人脸裁剪图。</div>';
+                return;
+            }
+            items.forEach(addFace);
+        }
 
         async function updateStats() {
-            const res = await fetch('/api/stats');
+            const res = await fetch("/api/stats");
             const data = await res.json();
-            totalDetections.textContent = data.total_detections;
-            totalFaces.textContent = data.total_faces;
-            devices.textContent = data.devices;
+            totalDetections.textContent = data.total_detections ?? 0;
+            totalFaces.textContent = data.total_faces ?? 0;
             devicesOnline.textContent = data.devices_online ?? 0;
-            lastDetection.textContent = data.last_detection;
-            if (data.app_version) appVersion.textContent = `v${data.app_version}`;
+            devices.textContent = data.devices ?? 0;
+            lastDetection.textContent = data.last_detection || "N/A";
+            appVersion.textContent = `v${data.app_version || "-"}`;
 
             if ((data.devices_online ?? 0) > 0) {
-                deviceStatus.textContent = '设备：已连接';
-                deviceStatus.style.color = '#22c55e';
+                deviceStatus.textContent = "设备在线";
+                deviceStatus.style.color = "#4ade80";
             } else {
-                deviceStatus.textContent = '设备：未连接';
-                deviceStatus.style.color = '#ef4444';
+                deviceStatus.textContent = "设备离线";
+                deviceStatus.style.color = "#f87171";
             }
         }
 
         async function loadDetections() {
-            const res = await fetch('/api/detections?limit=30');
+            const res = await fetch("/api/detections?limit=30");
             const data = await res.json();
-            detectionsList.innerHTML = '';
-            data.forEach(addDetection);
+            renderDetections(data);
         }
 
         async function loadFaces() {
-            const res = await fetch('/api/face_images?limit=24');
+            const res = await fetch("/api/face_images?limit=24");
             const data = await res.json();
-            facesGrid.innerHTML = '';
-            data.forEach(addFace);
+            renderFaces(data);
         }
 
-        function addFace(face) {
-            const div = document.createElement('div');
-            div.className = 'face-card';
-            div.innerHTML = `
-                <img src="/api/face_image/${face.id}" />
-                <div class="info">
-                    <div class="score">${(face.score*100).toFixed(1)}%</div>
-                    <div>${face.datetime}</div>
-                </div>
-            `;
-            facesGrid.prepend(div);
-            if (facesGrid.children.length > 24) facesGrid.removeChild(facesGrid.lastChild);
+        async function loadLatestOverlay() {
+            const res = await fetch("/api/latest_detection");
+            const data = await res.json();
+            if (data && Object.keys(data).length) {
+                latestOverlay = data;
+                drawOverlay();
+            }
         }
 
-        function addDetection(det) {
-            const div = document.createElement('div');
-            div.className = 'detection-item new-detection';
-            div.innerHTML = `
-                <div class="detection-header">
-                    <div>
-                        <div class="detection-time">${det.datetime}</div>
-                        <div class="device-info">设备: ${det.device} | 帧: ${det.frame}</div>
-                    </div>
-                    <div class="face-count">${det.face_count} 张</div>
-                </div>
-                <div class="face-box">
-                    ${det.faces.map(f => `<span class="face-tag">置信度 <span class="score">${(f.score*100).toFixed(1)}%</span></span>`).join('')}
-                </div>
-            `;
-            detectionsList.prepend(div);
-            if (detectionsList.children.length > 30) detectionsList.removeChild(detectionsList.lastChild);
-        }
-
-        socket.on('connect', () => {
-            statusDot.classList.remove('disconnected');
-            statusDot.classList.add('connected');
-            statusText.textContent = '已连接';
+        socket.on("connect", () => {
+            statusDot.classList.add("connected");
+            statusText.textContent = "WebSocket 已连接";
         });
-        socket.on('disconnect', () => {
-            statusDot.classList.remove('connected');
-            statusDot.classList.add('disconnected');
-            statusText.textContent = '已断开';
+
+        socket.on("disconnect", () => {
+            statusDot.classList.remove("connected");
+            statusText.textContent = "WebSocket 已断开";
         });
-        socket.on('new_detection', addDetection);
-        socket.on('new_face_image', addFace);
+
+        socket.on("new_detection", (det) => {
+            addDetection(det);
+            latestOverlay = det;
+            drawOverlay();
+            updateStats();
+        });
+
+        socket.on("overlay_update", (det) => {
+            latestOverlay = det;
+            drawOverlay();
+        });
+
+        socket.on("new_face_image", (face) => {
+            addFace(face);
+        });
+
+        rawStream.addEventListener("load", syncCanvasSize);
+        window.addEventListener("resize", syncCanvasSize);
 
         updateStats();
         loadDetections();
         loadFaces();
+        loadLatestOverlay();
         setInterval(updateStats, 5000);
+        setTimeout(syncCanvasSize, 300);
     </script>
 </body>
 </html>

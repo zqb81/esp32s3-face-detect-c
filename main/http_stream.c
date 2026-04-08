@@ -144,7 +144,7 @@ void http_stream_stop(void)
     }
 }
 
-static const char *UPLOAD_URL = "http://101.33.209.65:8081/upload";
+static const char *UPLOAD_URL = "http://101.33.209.65:8082/upload";
 
 void http_stream_upload(const uint8_t *jpeg_data, size_t len)
 {

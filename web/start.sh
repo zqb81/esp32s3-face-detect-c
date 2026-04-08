@@ -1,10 +1,12 @@
 #!/bin/bash
-# 启动人脸检测 Web 服务
+set -e
+
+# Start the unified face-detect web service.
 
 cd "$(dirname "$0")"
 
-echo "📦 安装依赖..."
-pip3 install -r requirements.txt -q
+echo "[web] installing dependencies..."
+python3 -m pip install -r requirements.txt -q
 
-echo "🚀 启动 Web 服务..."
+echo "[web] starting dashboard on :8082 ..."
 python3 app.py

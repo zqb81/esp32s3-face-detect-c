@@ -63,7 +63,7 @@ esp_err_t mqtt_init(void)
     return ESP_OK;
 }
 
-esp_err_t mqtt_send_faces(const face_list_t *faces)
+esp_err_t mqtt_send_faces(const face_list_t *faces, int frame, int img_w, int img_h)
 {
     if (!s_connected || !faces || faces->count == 0) {
         return ESP_OK;
@@ -75,7 +75,10 @@ esp_err_t mqtt_send_faces(const face_list_t *faces)
     // 时间戳（简单实现）
     int64_t ts = esp_timer_get_time() / 1000000;
     cJSON_AddNumberToObject(root, "ts", ts);
+    cJSON_AddNumberToObject(root, "frame", frame);
     cJSON_AddNumberToObject(root, "count", faces->count);
+    cJSON_AddNumberToObject(root, "img_w", img_w);
+    cJSON_AddNumberToObject(root, "img_h", img_h);
 
     cJSON *arr = cJSON_CreateArray();
     for (int i = 0; i < faces->count; i++) {
@@ -146,10 +149,12 @@ esp_err_t mqtt_send_face_crop(const uint8_t *rgb565, int img_w, int img_h,
         cJSON *root = cJSON_CreateObject();
         cJSON_AddStringToObject(root, "type", "face_crop");
         cJSON_AddStringToObject(root, "device", CLIENT_ID);
+        cJSON_AddNumberToObject(root, "ts", esp_timer_get_time() / 1000000);
         cJSON_AddNumberToObject(root, "score", face->score);
         cJSON_AddNumberToObject(root, "img_w", FACE_CROP_SIZE);
         cJSON_AddNumberToObject(root, "img_h", FACE_CROP_SIZE);
         cJSON_AddStringToObject(root, "img_data", b64);
+        cJSON_AddItemToObject(root, "box", cJSON_CreateIntArray((int[]){x1, y1, x2, y2}, 4));
 
         char *json = cJSON_PrintUnformatted(root);
         cJSON_Delete(root);

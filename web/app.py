@@ -1,45 +1,62 @@
 """
-人脸检测 Web 服务
-- MQTT 订阅接收数据
-- SQLite 存储历史
-- WebSocket 实时推送
-- Web 界面显示
+Face detect web service.
+
+- Receives face metadata from MQTT
+- Stores recent history in SQLite
+- Accepts uploaded JPEG frames from the ESP32
+- Serves raw and boxed MJPEG streams
+- Pushes live updates to the dashboard via WebSocket
 """
 
+from __future__ import annotations
+
+import base64
+import io
 import json
-import time
 import sqlite3
 import threading
-import base64
+import time
 from datetime import datetime
-from flask import Flask, render_template, jsonify, request, Response
-from flask_socketio import SocketIO, emit
-import paho.mqtt.client as mqtt
-from PIL import Image
-import io
+from pathlib import Path
+from typing import Any
 
-# ===== 配置 =====
-APP_VERSION = "2026.04.08-1"
-DEVICE_TIMEOUT = 10  # 设备离线阈值(秒)
-MQTT_BROKER = "127.0.0.1"  # 本地 MQTT
+import paho.mqtt.client as mqtt
+from flask import Flask, Response, jsonify, render_template, request
+from flask_socketio import SocketIO, emit
+from PIL import Image, ImageDraw
+
+
+APP_VERSION = "2026.04.08-2"
+DEVICE_TIMEOUT = 10
+FRAME_STALE_SECONDS = 3
+DETECTION_STALE_SECONDS = 1.5
+MQTT_BROKER = "127.0.0.1"
 MQTT_PORT = 1883
-MQTT_TOPIC = "esp32/face_detect"
-DB_PATH = "face_detect.db"
 FACE_TOPIC = "esp32/face_detect"
 CROP_TOPIC = "esp32/face_detect/crop"
 HOST = "0.0.0.0"
 PORT = 8082
+FRAME_INTERVAL_SECONDS = 0.05
 
-# ===== Flask 应用 =====
+BASE_DIR = Path(__file__).resolve().parent
+DB_PATH = BASE_DIR / "face_detect.db"
+
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'face_detect_secret'
-socketio = SocketIO(app, cors_allowed_origins="*")
+app.config["SECRET_KEY"] = "face_detect_secret"
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
-# ===== 数据库 =====
-def init_db():
+mqtt_client = None
+_device_last_seen: dict[str, float] = {}
+_state_lock = threading.Lock()
+_latest_frame: dict[str, Any] = {"data": None, "ts": 0.0}
+_latest_detection: dict[str, Any] | None = None
+
+
+def init_db() -> None:
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('''
+    c.execute(
+        """
         CREATE TABLE IF NOT EXISTS detections (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             device TEXT,
@@ -49,8 +66,10 @@ def init_db():
             face_count INTEGER,
             faces_json TEXT
         )
-    ''')
-    c.execute('''
+        """
+    )
+    c.execute(
+        """
         CREATE TABLE IF NOT EXISTS faces (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             detection_id INTEGER,
@@ -59,8 +78,10 @@ def init_db():
             keypoints_json TEXT,
             FOREIGN KEY (detection_id) REFERENCES detections(id)
         )
-    ''')
-    c.execute('''
+        """
+    )
+    c.execute(
+        """
         CREATE TABLE IF NOT EXISTS face_images (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             device TEXT,
@@ -70,107 +91,123 @@ def init_db():
             x1 INTEGER, y1 INTEGER, x2 INTEGER, y2 INTEGER,
             img_jpeg BLOB
         )
-    ''')
+        """
+    )
     conn.commit()
     conn.close()
 
-def save_detection(data):
+
+def _ensure_datetime(ts: float | int | None) -> tuple[float, str]:
+    timestamp = float(ts or time.time())
+    dt = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+    return timestamp, dt
+
+
+def save_detection(data: dict[str, Any]) -> int:
+    timestamp, dt = _ensure_datetime(data.get("timestamp"))
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    
-    dt = datetime.fromtimestamp(data["timestamp"]).strftime("%Y-%m-%d %H:%M:%S")
-    
-    c.execute('''
+    c.execute(
+        """
         INSERT INTO detections (device, timestamp, datetime, frame, face_count, faces_json)
         VALUES (?, ?, ?, ?, ?, ?)
-    ''', (
-        data["device"],
-        data["timestamp"],
-        dt,
-        data["frame"],
-        data["face_count"],
-        json.dumps(data["faces"])
-    ))
-    
+        """,
+        (
+            data["device"],
+            timestamp,
+            dt,
+            data["frame"],
+            data["face_count"],
+            json.dumps(data["faces"]),
+        ),
+    )
     detection_id = c.lastrowid
-    
+
     for face in data["faces"]:
-        box = face["box"]
+        box = face.get("box", [0, 0, 0, 0])
         kp_json = json.dumps(face.get("keypoints", {}))
-        c.execute('''
+        c.execute(
+            """
             INSERT INTO faces (detection_id, score, x1, y1, x2, y2, keypoints_json)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (detection_id, face["score"], box[0], box[1], box[2], box[3], kp_json))
-    
+            """,
+            (detection_id, face.get("score", 0), box[0], box[1], box[2], box[3], kp_json),
+        )
+
     conn.commit()
     conn.close()
     return detection_id
 
-def get_recent_detections(limit=100):
+
+def get_recent_detections(limit: int = 100) -> list[dict[str, Any]]:
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('''
+    c.execute(
+        """
         SELECT id, device, datetime, frame, face_count, faces_json
         FROM detections
         ORDER BY id DESC
         LIMIT ?
-    ''', (limit,))
+        """,
+        (limit,),
+    )
     rows = c.fetchall()
     conn.close()
-    
-    results = []
-    for row in rows:
-        results.append({
+
+    return [
+        {
             "id": row[0],
             "device": row[1],
             "datetime": row[2],
             "frame": row[3],
             "face_count": row[4],
-            "faces": json.loads(row[5])
-        })
-    return results
+            "faces": json.loads(row[5]),
+        }
+        for row in rows
+    ]
 
-def get_stats():
+
+def get_stats() -> dict[str, Any]:
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    
+
     c.execute("SELECT COUNT(*), SUM(face_count) FROM detections")
     row = c.fetchone()
     total_detections = row[0] or 0
     total_faces = row[1] or 0
-    
+
     c.execute("SELECT COUNT(DISTINCT device) FROM detections")
     devices = c.fetchone()[0] or 0
-    
+
     c.execute("SELECT datetime FROM detections ORDER BY id DESC LIMIT 1")
     last = c.fetchone()
-    last_time = last[0] if last else "无"
-    
+    last_time = last[0] if last else "N/A"
     conn.close()
 
     now = time.time()
-    devices_online = sum(1 for _, ts in _device_last_seen.items() if now - ts <= DEVICE_TIMEOUT)
-    
+    devices_online = sum(1 for ts in _device_last_seen.values() if now - ts <= DEVICE_TIMEOUT)
+
     return {
         "total_detections": total_detections,
         "total_faces": total_faces,
         "devices": devices,
         "devices_online": devices_online,
         "last_detection": last_time,
-        "app_version": APP_VERSION
+        "app_version": APP_VERSION,
     }
 
-def save_face_image(data):
-    """RGB565 base64 → JPEG → SQLite 存储"""
+
+def save_face_image(data: dict[str, Any]) -> int | None:
     img_b64 = data.get("img_data", "")
     if not img_b64:
         return None
-    
+
     rgb565 = base64.b64decode(img_b64)
-    w = data.get("img_w", 64)
-    h = data.get("img_h", 64)
-    
-    # RGB565 big-endian → RGB888
+    w = int(data.get("img_w", 64))
+    h = int(data.get("img_h", 64))
+    if len(rgb565) < w * h * 2:
+        return None
+
     pixels = bytearray(w * h * 3)
     for i in range(w * h):
         val = (rgb565[i * 2] << 8) | rgb565[i * 2 + 1]
@@ -180,150 +217,281 @@ def save_face_image(data):
         pixels[i * 3] = r
         pixels[i * 3 + 1] = g
         pixels[i * 3 + 2] = b
-    
+
     img = Image.frombytes("RGB", (w, h), bytes(pixels))
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=85)
     jpeg_bytes = buf.getvalue()
-    
+
+    timestamp, dt = _ensure_datetime(data.get("ts"))
     box = data.get("box", [0, 0, 0, 0])
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('''
+    c.execute(
+        """
         INSERT INTO face_images (device, timestamp, datetime, score, x1, y1, x2, y2, img_jpeg)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (
-        data.get("device", "unknown"),
-        data.get("ts", 0),
-        data.get("time", ""),
-        data.get("score", 0),
-        box[0], box[1], box[2], box[3],
-        jpeg_bytes
-    ))
+        """,
+        (
+            data.get("device", "unknown"),
+            timestamp,
+            dt,
+            data.get("score", 0),
+            box[0],
+            box[1],
+            box[2],
+            box[3],
+            jpeg_bytes,
+        ),
+    )
     face_id = c.lastrowid
     conn.commit()
     conn.close()
     return face_id
 
-def get_recent_face_images(limit=20):
+
+def get_recent_face_images(limit: int = 20) -> list[dict[str, Any]]:
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('''
+    c.execute(
+        """
         SELECT id, device, datetime, score, x1, y1, x2, y2
         FROM face_images
         ORDER BY id DESC
         LIMIT ?
-    ''', (limit,))
+        """,
+        (limit,),
+    )
     rows = c.fetchall()
     conn.close()
-    return [{
-        "id": r[0], "device": r[1], "datetime": r[2],
-        "score": r[3], "box": [r[4], r[5], r[6], r[7]]
-    } for r in rows]
+    return [
+        {
+            "id": row[0],
+            "device": row[1],
+            "datetime": row[2],
+            "score": row[3],
+            "box": [row[4], row[5], row[6], row[7]],
+        }
+        for row in rows
+    ]
 
-# ===== MQTT 回调 =====
-mqtt_client = None
-_device_last_seen = {}
+
+def _normalize_detection(raw: dict[str, Any]) -> dict[str, Any]:
+    timestamp, dt = _ensure_datetime(raw.get("ts", raw.get("timestamp")))
+    return {
+        "device": raw.get("device", "unknown"),
+        "timestamp": timestamp,
+        "datetime": dt,
+        "frame": int(raw.get("frame", 0)),
+        "face_count": int(raw.get("count", raw.get("face_count", 0))),
+        "faces": raw.get("faces", []),
+        "img_w": int(raw.get("img_w", 320)),
+        "img_h": int(raw.get("img_h", 240)),
+    }
+
+
+def _set_latest_detection(data: dict[str, Any]) -> None:
+    global _latest_detection
+    latest = dict(data)
+    latest["received_at"] = time.time()
+    with _state_lock:
+        _latest_detection = latest
+
+
+def _get_latest_detection() -> dict[str, Any] | None:
+    with _state_lock:
+        if not _latest_detection:
+            return None
+        latest = dict(_latest_detection)
+    if time.time() - latest["received_at"] > DETECTION_STALE_SECONDS:
+        return None
+    latest.pop("received_at", None)
+    return latest
+
+
+def _get_latest_frame() -> tuple[bytes | None, float]:
+    with _state_lock:
+        return _latest_frame["data"], _latest_frame["ts"]
+
+
+def _score_color(score: float) -> tuple[int, int, int]:
+    if score > 0.8:
+        return (34, 197, 94)
+    if score > 0.6:
+        return (234, 179, 8)
+    return (239, 68, 68)
+
+
+def _draw_boxes_on_jpeg(frame_data: bytes, detection: dict[str, Any] | None) -> bytes:
+    if not frame_data:
+        return b""
+
+    image = Image.open(io.BytesIO(frame_data)).convert("RGB")
+    if detection and detection.get("faces"):
+        draw = ImageDraw.Draw(image)
+        scale_x = image.width / max(detection.get("img_w", image.width), 1)
+        scale_y = image.height / max(detection.get("img_h", image.height), 1)
+        for face in detection["faces"]:
+            box = face.get("box", [0, 0, 0, 0])
+            x1 = int(box[0] * scale_x)
+            y1 = int(box[1] * scale_y)
+            x2 = int(box[2] * scale_x)
+            y2 = int(box[3] * scale_y)
+            color = _score_color(float(face.get("score", 0)))
+            draw.rectangle((x1, y1, x2, y2), outline=color, width=3)
+            draw.text((x1 + 4, max(0, y1 - 14)), f"{float(face.get('score', 0)):.2f}", fill=color)
+
+    buf = io.BytesIO()
+    image.save(buf, format="JPEG", quality=85)
+    return buf.getvalue()
+
+
+def _mjpeg_generator(boxed: bool):
+    while True:
+        frame_data, frame_ts = _get_latest_frame()
+        if frame_data and (time.time() - frame_ts) <= FRAME_STALE_SECONDS:
+            detection = _get_latest_detection() if boxed else None
+            output = _draw_boxes_on_jpeg(frame_data, detection) if boxed else frame_data
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n"
+                b"Content-Length: "
+                + str(len(output)).encode()
+                + b"\r\n\r\n"
+                + output
+                + b"\r\n"
+            )
+        time.sleep(FRAME_INTERVAL_SECONDS)
+
 
 def on_mqtt_connect(client, userdata, flags, rc):
     if rc == 0:
-        print(f"✅ MQTT 已连接: {MQTT_BROKER}")
+        print(f"[mqtt] connected to {MQTT_BROKER}:{MQTT_PORT}")
         client.subscribe(FACE_TOPIC)
         client.subscribe(CROP_TOPIC)
-        print(f"📡 订阅: {FACE_TOPIC}, {CROP_TOPIC}")
     else:
-        print(f"❌ MQTT 连接失败: {rc}")
+        print(f"[mqtt] connect failed: {rc}")
+
 
 def on_mqtt_message(client, userdata, msg):
     try:
-        topic = msg.topic
         raw = json.loads(msg.payload.decode())
         device_id = raw.get("device", "unknown")
         _device_last_seen[device_id] = time.time()
-        
-        if topic == CROP_TOPIC:
-            # 人脸裁剪图片
+
+        if msg.topic == CROP_TOPIC:
             face_id = save_face_image(raw)
             if face_id:
-                socketio.emit('new_face_image', {
-                    "id": face_id,
-                    "device": device_id,
-                    "datetime": raw.get("time", ""),
-                    "score": raw.get("score", 0),
-                    "box": raw.get("box", []),
-                    "img_url": f"/api/face_image/{face_id}"
-                }, namespace='/')
-                print(f"👤 人脸图片: ID={face_id} 置信度={raw.get('score', 0)}")
+                timestamp, dt = _ensure_datetime(raw.get("ts"))
+                socketio.emit(
+                    "new_face_image",
+                    {
+                        "id": face_id,
+                        "device": device_id,
+                        "datetime": dt,
+                        "timestamp": timestamp,
+                        "score": raw.get("score", 0),
+                        "box": raw.get("box", []),
+                        "img_url": f"/api/face_image/{face_id}",
+                    },
+                    namespace="/",
+                )
         else:
-            # 检测数据
-            data = {
-                "device": device_id,
-                "timestamp": raw.get("ts", raw.get("timestamp", time.time())),
-                "frame": raw.get("frame", 0),
-                "face_count": raw.get("count", raw.get("face_count", 0)),
-                "faces": raw.get("faces", []),
-            }
+            data = _normalize_detection(raw)
             save_detection(data)
-            socketio.emit('new_detection', data, namespace='/')
-            print(f"📨 收到: {data['device']} 帧{data['frame']} {data['face_count']}张人脸")
-        
-    except Exception as e:
-        print(f"处理消息错误: {e}")
+            _set_latest_detection(data)
+            socketio.emit("new_detection", data, namespace="/")
+            socketio.emit("overlay_update", data, namespace="/")
+    except Exception as exc:
+        print(f"[mqtt] message handling failed: {exc}")
 
-def start_mqtt():
+
+def start_mqtt() -> None:
     global mqtt_client
     mqtt_client = mqtt.Client(client_id="web_face_server")
     mqtt_client.on_connect = on_mqtt_connect
     mqtt_client.on_message = on_mqtt_message
-    
     try:
         mqtt_client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
         mqtt_client.loop_forever()
-    except Exception as e:
-        print(f"MQTT 错误: {e}")
+    except Exception as exc:
+        print(f"[mqtt] fatal error: {exc}")
 
-# ===== Web 路由 =====
-@app.route('/')
+
+@app.route("/")
 def index():
-    return render_template('index.html')
+    return render_template("index.html")
 
-@app.route('/api/detections')
+
+@app.route("/upload", methods=["POST"])
+def upload():
+    if request.content_type != "image/jpeg":
+        return "bad content-type", 400
+    data = request.get_data()
+    if not data:
+        return "no data", 400
+
+    with _state_lock:
+        _latest_frame["data"] = data
+        _latest_frame["ts"] = time.time()
+    return "ok"
+
+
+@app.route("/stream")
+def stream():
+    return Response(_mjpeg_generator(boxed=False), mimetype="multipart/x-mixed-replace; boundary=frame")
+
+
+@app.route("/stream_boxed")
+def stream_boxed():
+    return Response(_mjpeg_generator(boxed=True), mimetype="multipart/x-mixed-replace; boundary=frame")
+
+
+@app.route("/api/detections")
 def api_detections():
-    limit = request.args.get('limit', 100, type=int)
+    limit = request.args.get("limit", 100, type=int)
     return jsonify(get_recent_detections(limit))
 
-@app.route('/api/stats')
+
+@app.route("/api/stats")
 def api_stats():
     return jsonify(get_stats())
 
-@app.route('/api/face_image/<int:face_id>')
+
+@app.route("/api/latest_detection")
+def api_latest_detection():
+    return jsonify(_get_latest_detection() or {})
+
+
+@app.route("/api/face_image/<int:face_id>")
 def api_face_image(face_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute('SELECT img_jpeg FROM face_images WHERE id = ?', (face_id,))
+    c.execute("SELECT img_jpeg FROM face_images WHERE id = ?", (face_id,))
     row = c.fetchone()
     conn.close()
     if row and row[0]:
-        return Response(row[0], mimetype='image/jpeg')
-    return 'Not found', 404
+        return Response(row[0], mimetype="image/jpeg")
+    return "Not found", 404
 
-@app.route('/api/face_images')
+
+@app.route("/api/face_images")
 def api_face_images():
-    limit = request.args.get('limit', 20, type=int)
+    limit = request.args.get("limit", 20, type=int)
     return jsonify(get_recent_face_images(limit))
 
-@socketio.on('connect')
-def handle_connect():
-    print("🔗 WebSocket 客户端连接")
-    emit('connected', {'status': 'ok'})
 
-# ===== 主程序 =====
-if __name__ == '__main__':
+@socketio.on("connect")
+def handle_connect():
+    emit("connected", {"status": "ok"})
+    latest = _get_latest_detection()
+    if latest:
+        emit("overlay_update", latest)
+
+
+if __name__ == "__main__":
     init_db()
-    
-    # MQTT 线程
     mqtt_thread = threading.Thread(target=start_mqtt, daemon=True)
     mqtt_thread.start()
-    
-    print(f"🌐 Web 服务启动: http://{HOST}:{PORT}")
+    print(f"[web] dashboard ready at http://{HOST}:{PORT}")
     socketio.run(app, host=HOST, port=PORT, debug=False, allow_unsafe_werkzeug=True)
