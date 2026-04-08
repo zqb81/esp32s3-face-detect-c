@@ -1,37 +1,36 @@
 /**
- * HTTP MJPEG 视频流
+ * HTTP MJPEG streaming and async remote upload.
  */
 
 #ifndef HTTP_STREAM_H
 #define HTTP_STREAM_H
 
 #include "esp_err.h"
+
+#include <stddef.h>
 #include <stdint.h>
 
 /**
- * 启动 HTTP 流服务器
- * 提供 / (播放页) 和 /stream (MJPEG流)
+ * Start the local HTTP MJPEG server and async upload worker.
  */
 esp_err_t http_stream_start(int port);
 
 /**
- * 更新最新帧 (JPEG)
- * @param jpeg_data JPEG 帧数据
- * @param len 数据长度
+ * Update the latest JPEG frame used by the local /stream endpoint.
  */
 void http_stream_update_frame(const uint8_t *jpeg_data, size_t len);
 
 /**
- * 停止服务器
+ * Submit the latest JPEG frame to the async remote upload worker.
+ *
+ * The worker uses a latest-only strategy: if a newer frame arrives before the
+ * previous one is uploaded, the older pending frame is dropped.
  */
-void http_stream_stop(void);
+void http_stream_submit_upload(const uint8_t *jpeg_data, size_t len);
 
 /**
- * 上传 JPEG 帧到远程服务器
- * @param jpeg_data JPEG 数据
- * @param len 数据长度
- * @param interval_ms 最短上传间隔 (ms)
+ * Stop the local server.
  */
-void http_stream_upload(const uint8_t *jpeg_data, size_t len);
+void http_stream_stop(void);
 
 #endif // HTTP_STREAM_H

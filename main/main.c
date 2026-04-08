@@ -45,6 +45,51 @@ typedef struct {
     size_t len;
 } frame_msg_t;
 
+typedef struct {
+    uint32_t count;
+    uint64_t total_us;
+    uint32_t max_us;
+} perf_bucket_t;
+
+static void perf_bucket_add(perf_bucket_t *bucket, int64_t elapsed_us)
+{
+    if (!bucket || elapsed_us < 0) {
+        return;
+    }
+
+    bucket->count++;
+    bucket->total_us += (uint64_t)elapsed_us;
+    if ((uint32_t)elapsed_us > bucket->max_us) {
+        bucket->max_us = (uint32_t)elapsed_us;
+    }
+}
+
+static float perf_bucket_avg_ms(const perf_bucket_t *bucket)
+{
+    if (!bucket || bucket->count == 0) {
+        return 0.0f;
+    }
+    return (float)bucket->total_us / 1000.0f / (float)bucket->count;
+}
+
+static float perf_bucket_max_ms(const perf_bucket_t *bucket)
+{
+    if (!bucket) {
+        return 0.0f;
+    }
+    return (float)bucket->max_us / 1000.0f;
+}
+
+static void perf_bucket_reset(perf_bucket_t *bucket)
+{
+    if (!bucket) {
+        return;
+    }
+    bucket->count = 0;
+    bucket->total_us = 0;
+    bucket->max_us = 0;
+}
+
 static void face_list_replace(face_list_t *dst, const face_list_t *src)
 {
     face_detect_free(dst);
@@ -220,6 +265,11 @@ static void process_task(void *arg)
     int64_t fps_time = esp_timer_get_time();
     int last_jpeg_size = 0;
     face_list_t last_faces = {0};
+    perf_bucket_t decode_perf = {0};
+    perf_bucket_t downsample_perf = {0};
+    perf_bucket_t detect_perf = {0};
+    perf_bucket_t display_perf = {0};
+    perf_bucket_t total_perf = {0};
 
     while (1) {
         frame_msg_t msg;
@@ -227,25 +277,32 @@ static void process_task(void *arg)
             continue;
         }
 
+        int64_t frame_start_us = esp_timer_get_time();
         last_jpeg_size = (int)msg.len;
 
         int out_w = 0;
         int out_h = 0;
+        int64_t decode_start_us = esp_timer_get_time();
         esp_err_t dec_ret = camera_jpeg_to_rgb565(msg.data, msg.len, rgb_buf, &out_w, &out_h);
+        perf_bucket_add(&decode_perf, esp_timer_get_time() - decode_start_us);
 
         http_stream_update_frame(msg.data, msg.len);
-        http_stream_upload(msg.data, msg.len);
+        http_stream_submit_upload(msg.data, msg.len);
         xQueueSend(s_free_queue, &msg.data, 0);
 
         if (dec_ret != ESP_OK || out_w <= 0 || out_h <= 0) {
             continue;
         }
 
+        int64_t downsample_start_us = esp_timer_get_time();
         downsample_frame(rgb_buf, tft_buf, out_w, out_h, TFT_WIDTH, TFT_HEIGHT);
+        perf_bucket_add(&downsample_perf, esp_timer_get_time() - downsample_start_us);
 
         face_list_t faces = {0};
-        if (frame % 5 == 0) {
+        if (FACE_DETECT_INTERVAL_FRAMES > 0 && (frame % FACE_DETECT_INTERVAL_FRAMES) == 0) {
+            int64_t detect_start_us = esp_timer_get_time();
             esp_err_t det_ret = face_detect_run(rgb_buf, out_w, out_h, &faces);
+            perf_bucket_add(&detect_perf, esp_timer_get_time() - detect_start_us);
             if (det_ret != ESP_OK) {
                 ESP_LOGW(TAG, "face_detect_run failed on frame %d: %s", frame, esp_err_to_name(det_ret));
             } else if (faces.count > 0) {
@@ -270,32 +327,52 @@ static void process_task(void *arg)
         if (last_faces.count > 0) {
             draw_face_boxes(tft_buf, &last_faces, TFT_WIDTH, TFT_HEIGHT, out_w, out_h);
         }
+
+        int64_t display_start_us = esp_timer_get_time();
         display_draw_frame(tft_buf);
+        perf_bucket_add(&display_perf, esp_timer_get_time() - display_start_us);
         face_detect_free(&faces);
 
         frame++;
         fps_count++;
+        perf_bucket_add(&total_perf, esp_timer_get_time() - frame_start_us);
 
         int64_t elapsed_ms = (esp_timer_get_time() - fps_time) / 1000;
-        if (elapsed_ms >= 1000) {
+        if (elapsed_ms >= PERF_LOG_INTERVAL_MS) {
             float fps = fps_count * 1000.0f / elapsed_ms;
             size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
             size_t ram_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
             UBaseType_t work_pending = uxQueueMessagesWaiting(s_work_queue);
             UBaseType_t free_avail = uxQueueMessagesWaiting(s_free_queue);
 
-            ESP_LOGI(TAG,
-                     "FPS:%.1f frame:%d jpeg:%dB PSRAM:%.0fK RAM:%.0fK queued:%d free:%d",
+            ESP_LOGW(TAG,
+                     "FPS:%.1f frame:%d jpeg:%dB PSRAM:%.0fK RAM:%.0fK queued:%d free:%d "
+                     "dec:%.1f/%.1fms down:%.1f/%.1fms det:%.1f/%.1fms draw:%.1f/%.1fms total:%.1f/%.1fms",
                      fps,
                      frame,
                      last_jpeg_size,
                      psram_free / 1024.0f,
                      ram_free / 1024.0f,
                      work_pending,
-                     free_avail);
+                     free_avail,
+                     perf_bucket_avg_ms(&decode_perf),
+                     perf_bucket_max_ms(&decode_perf),
+                     perf_bucket_avg_ms(&downsample_perf),
+                     perf_bucket_max_ms(&downsample_perf),
+                     perf_bucket_avg_ms(&detect_perf),
+                     perf_bucket_max_ms(&detect_perf),
+                     perf_bucket_avg_ms(&display_perf),
+                     perf_bucket_max_ms(&display_perf),
+                     perf_bucket_avg_ms(&total_perf),
+                     perf_bucket_max_ms(&total_perf));
 
             fps_time = esp_timer_get_time();
             fps_count = 0;
+            perf_bucket_reset(&decode_perf);
+            perf_bucket_reset(&downsample_perf);
+            perf_bucket_reset(&detect_perf);
+            perf_bucket_reset(&display_perf);
+            perf_bucket_reset(&total_perf);
         }
     }
 }
