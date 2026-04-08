@@ -30,6 +30,8 @@ APP_VERSION = "2026.04.08-2"
 DEVICE_TIMEOUT = 10
 FRAME_STALE_SECONDS = 3
 DETECTION_STALE_SECONDS = 1.5
+MIN_VALID_UNIX_TS = 1577808000  # 2020-01-01 00:00:00
+MAX_FUTURE_SKEW_SECONDS = 86400
 MQTT_BROKER = "127.0.0.1"
 MQTT_PORT = 1883
 FACE_TOPIC = "esp32/face_detect"
@@ -97,8 +99,27 @@ def init_db() -> None:
     conn.close()
 
 
+def _normalize_timestamp(ts: float | int | None) -> float:
+    now = time.time()
+    if ts is None:
+        return now
+
+    try:
+        timestamp = float(ts)
+    except (TypeError, ValueError):
+        return now
+
+    if timestamp > 1e12:
+        timestamp /= 1000.0
+
+    if timestamp < MIN_VALID_UNIX_TS or timestamp > (now + MAX_FUTURE_SKEW_SECONDS):
+        return now
+
+    return timestamp
+
+
 def _ensure_datetime(ts: float | int | None) -> tuple[float, str]:
-    timestamp = float(ts or time.time())
+    timestamp = _normalize_timestamp(ts)
     dt = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
     return timestamp, dt
 
