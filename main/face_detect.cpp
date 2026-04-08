@@ -202,7 +202,7 @@ esp_err_t face_detect_run(const uint8_t *rgb565_buf, int width, int height, face
         .data = (void *)rgb565_buf,
         .width = (uint16_t)width,
         .height = (uint16_t)height,
-        .pix_type = dl::image::DL_IMAGE_PIX_TYPE_RGB565LE,
+        .pix_type = dl::image::DL_IMAGE_PIX_TYPE_RGB565BE,
     };
 
     std::list<dl::detect::result_t> &det_results = s_detector->run(img);

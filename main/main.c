@@ -205,7 +205,7 @@ static void process_task(void *arg)
     ESP_LOGI(TAG, "Process task start on core %d", xPortGetCoreID());
 
     uint8_t *rgb_buf = heap_caps_malloc(CAM_W * CAM_H * 2, MALLOC_CAP_SPIRAM);
-    uint8_t *tft_buf = heap_caps_malloc(TFT_WIDTH * TFT_HEIGHT * 2, MALLOC_CAP_DMA);
+    uint8_t *tft_buf = heap_caps_malloc(TFT_WIDTH * TFT_HEIGHT * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
     if (!rgb_buf || !tft_buf) {
         ESP_LOGE(TAG, "Process buffers allocation failed");
@@ -245,8 +245,10 @@ static void process_task(void *arg)
 
         face_list_t faces = {0};
         if (frame % 5 == 0) {
-            face_detect_run(rgb_buf, out_w, out_h, &faces);
-            if (faces.count > 0) {
+            esp_err_t det_ret = face_detect_run(rgb_buf, out_w, out_h, &faces);
+            if (det_ret != ESP_OK) {
+                ESP_LOGW(TAG, "face_detect_run failed on frame %d: %s", frame, esp_err_to_name(det_ret));
+            } else if (faces.count > 0) {
                 mqtt_send_faces(&faces, frame, out_w, out_h);
                 face_list_replace(&last_faces, &faces);
 
