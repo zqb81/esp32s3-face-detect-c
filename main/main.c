@@ -268,6 +268,7 @@ static void process_task(void *arg)
     perf_bucket_t decode_perf = {0};
     perf_bucket_t downsample_perf = {0};
     perf_bucket_t detect_perf = {0};
+    perf_bucket_t crop_submit_perf = {0};
     perf_bucket_t display_perf = {0};
     perf_bucket_t total_perf = {0};
 
@@ -317,7 +318,9 @@ static void process_task(void *arg)
                 }
 
                 if (best->score > FACE_SCORE_THRESHOLD) {
+                    int64_t crop_submit_start_us = esp_timer_get_time();
                     mqtt_send_face_crop(rgb_buf, out_w, out_h, best);
+                    perf_bucket_add(&crop_submit_perf, esp_timer_get_time() - crop_submit_start_us);
                 }
             } else {
                 face_detect_free(&last_faces);
@@ -347,7 +350,8 @@ static void process_task(void *arg)
 
             ESP_LOGW(TAG,
                      "FPS:%.1f frame:%d jpeg:%dB PSRAM:%.0fK RAM:%.0fK queued:%d free:%d "
-                     "dec:%.1f/%.1fms down:%.1f/%.1fms det:%.1f/%.1fms draw:%.1f/%.1fms total:%.1f/%.1fms",
+                     "dec:%.1f/%.1fms down:%.1f/%.1fms det:%.1f/%.1fms crop:%.1f/%.1fms "
+                     "draw:%.1f/%.1fms total:%.1f/%.1fms",
                      fps,
                      frame,
                      last_jpeg_size,
@@ -361,6 +365,8 @@ static void process_task(void *arg)
                      perf_bucket_max_ms(&downsample_perf),
                      perf_bucket_avg_ms(&detect_perf),
                      perf_bucket_max_ms(&detect_perf),
+                     perf_bucket_avg_ms(&crop_submit_perf),
+                     perf_bucket_max_ms(&crop_submit_perf),
                      perf_bucket_avg_ms(&display_perf),
                      perf_bucket_max_ms(&display_perf),
                      perf_bucket_avg_ms(&total_perf),
@@ -371,6 +377,7 @@ static void process_task(void *arg)
             perf_bucket_reset(&decode_perf);
             perf_bucket_reset(&downsample_perf);
             perf_bucket_reset(&detect_perf);
+            perf_bucket_reset(&crop_submit_perf);
             perf_bucket_reset(&display_perf);
             perf_bucket_reset(&total_perf);
         }

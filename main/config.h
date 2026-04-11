@@ -63,6 +63,8 @@
 #define FACE_DETECT_INTERVAL_MS     200
 #define FACE_CROP_SIZE              64
 #define FACE_CROP_INTERVAL_MS       1000
+#define FACE_CROP_TASK_STACK_SIZE   6144
+#define FACE_CROP_TASK_PRIORITY     4
 #define FACE_SCORE_THRESHOLD        0.6f
 #define FACE_BOX_SCALE              1.3f
 

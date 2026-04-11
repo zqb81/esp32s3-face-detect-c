@@ -160,6 +160,18 @@ python app.py
 
 通常是因为小程序侧没有配置 HTTPS 合法域名，或者图片域名没有加入 `downloadFile` 合法域名。
 
+### 4. 视频流和检测记录都在更新，但最近人脸裁剪一直是旧图
+
+这类问题通常不是前端没刷新，而是 Web 服务没有收到新的 `esp32/face_detect/crop` 消息。
+
+优先检查：
+
+- 设备端是否还在持续发布 `esp32/face_detect/crop`
+- `GET /api/face_images` 返回的最新 `id` 和时间是否持续增长
+- MQTT Broker 上直接订阅该 topic 时，是否还能看到新消息
+
+如果检测 topic 还在更新、`/upload` 也还在收到新帧，但 crop topic 静默，根因通常在设备端抓拍编码或 MQTT 发布链路，不在 Web 前端。
+
 ### 3. `video_relay.py` 还能不能用
 
 不能作为主入口使用。这个文件只保留兼容提示，当前应使用：

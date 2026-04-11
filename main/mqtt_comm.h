@@ -20,10 +20,11 @@ esp_err_t mqtt_init(void);
 esp_err_t mqtt_send_faces(const face_list_t *faces, int frame, int img_w, int img_h);
 
 /**
- * 发送人脸裁剪图 (base64)
+ * 发送人脸裁剪图。
+ * 内部会做节流，并尽量异步完成编码和 MQTT 发布。
  */
 esp_err_t mqtt_send_face_crop(const uint8_t *rgb565, int img_w, int img_h,
-                              const face_result_t *face);
+                               const face_result_t *face);
 
 /**
  * 断开连接
