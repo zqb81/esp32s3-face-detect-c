@@ -97,6 +97,7 @@ python app.py
 
 - `GET /`
   - 浏览器看板页面
+  - 页面会优先使用 WebSocket 接收实时推送；如果 `socket.io` 客户端脚本不可用，或者 WebSocket 连接断开，会自动降级为 HTTP 轮询，继续刷新统计、检测记录和人脸裁剪图
 - `GET /stream`
   - 原始 MJPEG 视频流
 - `GET /stream_boxed`
@@ -140,7 +141,22 @@ python app.py
 
 通常是因为 ESP32 还没有向 `/upload` 上传最新 JPEG，或者上传间隔太久导致帧已过期。
 
-### 2. 浏览器看板有数据，但小程序没图片
+### 2. 页面只有视频流，没有统计或人脸裁剪图
+
+旧版本前端会强依赖外部 `socket.io` CDN。只要这个脚本加载失败，页面脚本就会在初始化阶段中断，结果只剩 HTML 里的视频流 `<img>` 还能显示。
+
+当前版本已经改成自动降级：
+
+- `socket.io` 可用时，继续使用 WebSocket 实时推送
+- `socket.io` 不可用时，自动改为每 5 秒轮询 `/api/stats`、`/api/detections`、`/api/face_images` 和 `/api/latest_detection`
+
+如果升级后仍然异常，优先检查：
+
+- 浏览器开发者工具里是否有前端脚本报错
+- `/api/face_images` 是否能正常返回 JSON
+- `/api/face_image/<id>` 是否能直接打开图片
+
+### 3. 浏览器看板有数据，但小程序没图片
 
 通常是因为小程序侧没有配置 HTTPS 合法域名，或者图片域名没有加入 `downloadFile` 合法域名。
 
@@ -160,3 +176,4 @@ python app.py
 2. 给域名配置 HTTPS 证书
 3. 小程序使用单独子域名，例如 `api.example.com`
 4. MQTT Broker 与 Web 服务尽量放在同一台服务器或同一内网
+5. 如果浏览器环境无法稳定访问外部 CDN，也可以继续使用当前版本的轮询兜底模式；这样即使 WebSocket 客户端脚本加载失败，看板的统计、记录和抓拍图也不会整块失效

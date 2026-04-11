@@ -341,7 +341,7 @@
     </div>
 
     <script>
-        const socket = io();
+        const socket = typeof window.io === "function" ? window.io() : null;
         const statusDot = document.getElementById("statusDot");
         const statusText = document.getElementById("statusText");
         const deviceStatus = document.getElementById("deviceStatus");
@@ -363,6 +363,34 @@
             if (score > 0.8) return "#22c55e";
             if (score > 0.6) return "#facc15";
             return "#ef4444";
+        }
+
+        function setLiveStatus(mode, connected) {
+            statusDot.classList.toggle("connected", connected);
+            statusText.textContent = mode;
+        }
+
+        function normalizeList(items) {
+            return Array.isArray(items) ? items : [];
+        }
+
+        async function fetchJson(url) {
+            const res = await fetch(url, { cache: "no-store" });
+            if (!res.ok) {
+                throw new Error(`${url} -> ${res.status}`);
+            }
+            const data = await res.json();
+            if (!socket) {
+                setLiveStatus("轮询刷新中", true);
+            }
+            return data;
+        }
+
+        function markRefreshError(label, error, allowFallback = true) {
+            console.warn(`[dashboard] ${label} failed`, error);
+            if (!socket && allowFallback) {
+                setLiveStatus("轮询刷新失败", false);
+            }
         }
 
         function syncCanvasSize() {
@@ -443,12 +471,18 @@
             const item = document.createElement("div");
             item.className = "face-card";
             item.innerHTML = `
-                <img src="/api/face_image/${face.id}" alt="face crop">
+                <img src="${face.img_url || `/api/face_image/${face.id}`}" alt="face crop" loading="lazy" decoding="async">
                 <div class="info">
                     <div class="score">${((face.score || 0) * 100).toFixed(1)}%</div>
                     <div>${face.datetime || "N/A"}</div>
                 </div>
             `;
+            const img = item.querySelector("img");
+            img.addEventListener("error", () => {
+                img.replaceWith(document.createRange().createContextualFragment(
+                    '<div class="empty-note">图片加载失败</div>'
+                ));
+            }, { once: true });
             facesGrid.prepend(item);
             if (facesGrid.children.length > 24) {
                 facesGrid.removeChild(facesGrid.lastChild);
@@ -457,96 +491,126 @@
 
         function renderDetections(items) {
             detectionsList.innerHTML = "";
-            if (!items.length) {
+            const list = normalizeList(items);
+            if (!list.length) {
                 detectionsList.innerHTML = '<div class="empty-note">还没有检测记录。</div>';
                 return;
             }
-            items.forEach(addDetection);
+            list.slice().reverse().forEach(addDetection);
         }
 
         function renderFaces(items) {
             facesGrid.innerHTML = "";
-            if (!items.length) {
+            const list = normalizeList(items);
+            if (!list.length) {
                 facesGrid.innerHTML = '<div class="empty-note">还没有人脸裁剪图。</div>';
                 return;
             }
-            items.forEach(addFace);
+            list.slice().reverse().forEach(addFace);
         }
 
         async function updateStats() {
-            const res = await fetch("/api/stats");
-            const data = await res.json();
-            totalDetections.textContent = data.total_detections ?? 0;
-            totalFaces.textContent = data.total_faces ?? 0;
-            devicesOnline.textContent = data.devices_online ?? 0;
-            devices.textContent = data.devices ?? 0;
-            lastDetection.textContent = data.last_detection || "N/A";
-            appVersion.textContent = `v${data.app_version || "-"}`;
+            try {
+                const data = await fetchJson("/api/stats");
+                totalDetections.textContent = data.total_detections ?? 0;
+                totalFaces.textContent = data.total_faces ?? 0;
+                devicesOnline.textContent = data.devices_online ?? 0;
+                devices.textContent = data.devices ?? 0;
+                lastDetection.textContent = data.last_detection || "N/A";
+                appVersion.textContent = `v${data.app_version || "-"}`;
 
-            if ((data.devices_online ?? 0) > 0) {
-                deviceStatus.textContent = "设备在线";
-                deviceStatus.style.color = "#4ade80";
-            } else {
-                deviceStatus.textContent = "设备离线";
-                deviceStatus.style.color = "#f87171";
+                if ((data.devices_online ?? 0) > 0) {
+                    deviceStatus.textContent = "设备在线";
+                    deviceStatus.style.color = "#4ade80";
+                } else {
+                    deviceStatus.textContent = "设备离线";
+                    deviceStatus.style.color = "#f87171";
+                }
+            } catch (error) {
+                markRefreshError("stats", error);
             }
         }
 
         async function loadDetections() {
-            const res = await fetch("/api/detections?limit=30");
-            const data = await res.json();
-            renderDetections(data);
-        }
-
-        async function loadFaces() {
-            const res = await fetch("/api/face_images?limit=24");
-            const data = await res.json();
-            renderFaces(data);
-        }
-
-        async function loadLatestOverlay() {
-            const res = await fetch("/api/latest_detection");
-            const data = await res.json();
-            if (data && Object.keys(data).length) {
-                latestOverlay = data;
-                drawOverlay();
+            try {
+                const data = await fetchJson("/api/detections?limit=30");
+                renderDetections(data);
+            } catch (error) {
+                markRefreshError("detections", error);
+                if (!detectionsList.children.length) {
+                    detectionsList.innerHTML = '<div class="empty-note">检测记录加载失败。</div>';
+                }
             }
         }
 
-        socket.on("connect", () => {
-            statusDot.classList.add("connected");
-            statusText.textContent = "WebSocket 已连接";
-        });
+        async function loadFaces() {
+            try {
+                const data = await fetchJson("/api/face_images?limit=24");
+                renderFaces(data);
+            } catch (error) {
+                markRefreshError("faces", error);
+                if (!facesGrid.children.length) {
+                    facesGrid.innerHTML = '<div class="empty-note">人脸裁剪图加载失败。</div>';
+                }
+            }
+        }
 
-        socket.on("disconnect", () => {
-            statusDot.classList.remove("connected");
-            statusText.textContent = "WebSocket 已断开";
-        });
+        async function loadLatestOverlay() {
+            try {
+                const data = await fetchJson("/api/latest_detection");
+                if (data && Object.keys(data).length) {
+                    latestOverlay = data;
+                    drawOverlay();
+                } else if (!latestOverlay) {
+                    drawOverlay();
+                }
+            } catch (error) {
+                markRefreshError("latest_overlay", error, false);
+            }
+        }
 
-        socket.on("new_detection", (det) => {
-            addDetection(det);
-            latestOverlay = det;
-            drawOverlay();
-            updateStats();
-        });
+        async function refreshDashboard() {
+            await Promise.all([
+                updateStats(),
+                loadDetections(),
+                loadFaces(),
+                loadLatestOverlay(),
+            ]);
+        }
 
-        socket.on("overlay_update", (det) => {
-            latestOverlay = det;
-            drawOverlay();
-        });
+        if (socket) {
+            socket.on("connect", () => {
+                setLiveStatus("WebSocket 已连接", true);
+            });
 
-        socket.on("new_face_image", (face) => {
-            addFace(face);
-        });
+            socket.on("disconnect", () => {
+                setLiveStatus("WebSocket 已断开，已切换轮询", false);
+            });
+
+            socket.on("new_detection", (det) => {
+                addDetection(det);
+                latestOverlay = det;
+                drawOverlay();
+                updateStats();
+            });
+
+            socket.on("overlay_update", (det) => {
+                latestOverlay = det;
+                drawOverlay();
+            });
+
+            socket.on("new_face_image", (face) => {
+                addFace(face);
+            });
+        } else {
+            setLiveStatus("实时推送不可用，已切换轮询", false);
+        }
 
         rawStream.addEventListener("load", syncCanvasSize);
         window.addEventListener("resize", syncCanvasSize);
 
-        updateStats();
-        loadDetections();
-        loadFaces();
-        loadLatestOverlay();
-        setInterval(updateStats, 5000);
+        refreshDashboard();
+        setInterval(refreshDashboard, 5000);
         setTimeout(syncCanvasSize, 300);
     </script>
 </body>
