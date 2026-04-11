@@ -1,0 +1,70 @@
+<view class="page-shell">
+  <view class="hero-card card-animate">
+    <view class="hero-top">
+      <view>
+        <text class="hero-eyebrow">历史记录</text>
+        <text class="hero-title">最近检测事件</text>
+        <text class="hero-desc">默认展示最近 20 条检测记录，包含设备、时间、人数与每张脸的框坐标摘要。</text>
+      </view>
+      <button class="action-button compact-button" bindtap="handleManualRefresh" loading="{{loading}}">刷新列表</button>
+    </view>
+
+    <view class="page-nav">
+      <view class="nav-item" bindtap="goHome">首页</view>
+      <view class="nav-item active">检测记录</view>
+      <view class="nav-item" bindtap="goFaces">人脸抓拍</view>
+    </view>
+  </view>
+
+  <view class="glass-panel card-animate">
+    <view class="panel-head">
+      <view>
+        <text class="panel-title">当前列表</text>
+        <text class="panel-subtitle">支持下拉刷新，空数据时显示明确占位</text>
+      </view>
+      <view class="count-badge">20 条内</view>
+    </view>
+
+    <view class="meta-grid">
+      <view class="meta-card">
+        <text class="meta-label">最近刷新</text>
+        <text class="meta-value">{{lastRefreshText}}</text>
+      </view>
+      <view class="meta-card">
+        <text class="meta-label">展示策略</text>
+        <text class="meta-value">仅展示最近记录</text>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{hasError}}" class="error-banner card-animate">
+    {{errorMessage}}
+  </view>
+
+  <block wx:if="{{records.length}}">
+    <view wx:for="{{records}}" wx:key="id" class="list-card card-animate">
+      <view class="list-head">
+        <view>
+          <text class="list-title">{{item.datetime}}</text>
+          <text class="list-meta">设备 {{item.device}} | 帧 {{item.frame}}</text>
+        </view>
+        <view class="count-badge">{{item.faceCount}} 人</view>
+      </view>
+
+      <view class="face-chip-row" wx:if="{{item.faces.length}}">
+        <view wx:for="{{item.faces}}" wx:key="id" class="face-chip">
+          分数 {{item.scoreText}} | {{item.boxText}}
+        </view>
+      </view>
+
+      <view wx:else class="chip-row">
+        <view class="chip">本次记录没有人脸框</view>
+      </view>
+    </view>
+  </block>
+
+  <view wx:else class="empty-panel card-animate">
+    <text class="empty-title">还没有检测记录</text>
+    <text class="empty-desc">请先确认 ESP32 已通过 MQTT 上报检测结果，或者等待后端产生首条记录。</text>
+  </view>
+</view>

@@ -1,0 +1,16 @@
+{
+  "pages": [
+    "pages/home/home",
+    "pages/detections/detections",
+    "pages/faces/faces"
+  ],
+  "window": {
+    "navigationBarTitleText": "ESP32-S3 人脸看板",
+    "navigationBarBackgroundColor": "#07111f",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#07111f",
+    "backgroundTextStyle": "light"
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}

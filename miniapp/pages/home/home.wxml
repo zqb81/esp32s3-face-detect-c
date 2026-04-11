@@ -1,0 +1,146 @@
+<view class="page-shell">
+  <view class="hero-card card-animate">
+    <view class="hero-top">
+      <view>
+        <text class="hero-eyebrow">微信小程序结果看板</text>
+        <text class="hero-title">ESP32-S3 人脸检测</text>
+        <text class="hero-desc">聚合现有 Python 服务数据，专注展示运行状态、最新检测结果和抓拍信息。</text>
+      </view>
+      <view class="status-pill {{connected ? 'connected' : 'disconnected'}}">
+        <view class="status-dot"></view>
+        <text>{{connected ? '服务可达' : '服务未连通'}}</text>
+      </view>
+    </view>
+
+    <view class="page-nav">
+      <view class="nav-item active">首页</view>
+      <view class="nav-item" bindtap="goDetections">检测记录</view>
+      <view class="nav-item" bindtap="goFaces">人脸抓拍</view>
+    </view>
+  </view>
+
+  <view class="glass-panel card-animate">
+    <view class="panel-head">
+      <view>
+        <text class="panel-title">连接信息</text>
+        <text class="panel-subtitle">当前版本使用 HTTP 轮询现有 Web 服务</text>
+      </view>
+      <button class="action-button" bindtap="handleManualRefresh" loading="{{loading}}">立即刷新</button>
+    </view>
+
+    <view class="meta-grid">
+      <view class="meta-card">
+        <text class="meta-label">服务地址</text>
+        <text class="meta-value">{{baseUrl}}</text>
+      </view>
+      <view class="meta-card">
+        <text class="meta-label">最近刷新</text>
+        <text class="meta-value">{{lastRefreshText}}</text>
+      </view>
+      <view class="meta-card">
+        <text class="meta-label">刷新模式</text>
+        <text class="meta-value">每 5 秒自动轮询</text>
+      </view>
+      <view class="meta-card">
+        <text class="meta-label">接入方式</text>
+        <text class="meta-value">复用 web/app.py</text>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{hasError}}" class="error-banner card-animate">
+    {{errorMessage}}
+  </view>
+
+  <text class="section-title">运行概览</text>
+  <view class="stats-grid">
+    <view wx:for="{{statsCards}}" wx:key="label" class="stat-card {{item.accentClass}} card-animate">
+      <text class="stat-label">{{item.label}}</text>
+      <text class="stat-value">{{item.value}}</text>
+    </view>
+  </view>
+
+  <view class="glass-panel card-animate">
+    <view class="panel-head">
+      <view>
+        <text class="panel-title">最新检测结果</text>
+        <text class="panel-subtitle">展示后端当前缓存的最近一次检测</text>
+      </view>
+      <button class="ghost-button" bindtap="goDetections">查看全部记录</button>
+    </view>
+
+    <block wx:if="{{latestDetection}}">
+      <view class="meta-grid latest-grid">
+        <view class="meta-card">
+          <text class="meta-label">设备</text>
+          <text class="meta-value">{{latestDetection.device}}</text>
+        </view>
+        <view class="meta-card">
+          <text class="meta-label">检测时间</text>
+          <text class="meta-value">{{latestDetection.datetime}}</text>
+        </view>
+        <view class="meta-card">
+          <text class="meta-label">检测人数</text>
+          <text class="meta-value">{{latestDetection.faceCount}}</text>
+        </view>
+        <view class="meta-card">
+          <text class="meta-label">帧序号</text>
+          <text class="meta-value">{{latestDetection.frame}}</text>
+        </view>
+      </view>
+
+      <view class="face-chip-row" wx:if="{{latestDetection.faces.length}}">
+        <view wx:for="{{latestDetection.faces}}" wx:key="id" class="face-chip">
+          分数 {{item.scoreText}} | {{item.boxText}}
+        </view>
+      </view>
+
+      <view wx:else class="empty-panel compact-empty">
+        <text class="empty-title">最近一次没有检测到人脸</text>
+        <text class="empty-desc">设备在线但当前结果为空时，这里会显示空状态而不是报错。</text>
+      </view>
+    </block>
+
+    <view wx:else class="empty-panel">
+      <text class="empty-title">暂时还没有检测记录</text>
+      <text class="empty-desc">等设备开始上报数据后，这里会自动显示最近一次检测结果。</text>
+    </view>
+  </view>
+
+  <view class="glass-panel card-animate">
+    <view class="panel-head">
+      <view>
+        <text class="panel-title">最近抓拍预览</text>
+        <text class="panel-subtitle">展示最近 6 张人脸抓拍缩略图</text>
+      </view>
+      <button class="ghost-button" bindtap="goFaces">查看全部抓拍</button>
+    </view>
+
+    <view wx:if="{{latestFaces.length}}" class="preview-grid">
+      <view wx:for="{{latestFaces}}" wx:key="id" class="preview-card">
+        <block wx:if="{{!item.imageError}}">
+          <image
+            class="preview-image"
+            src="{{item.imageUrl}}"
+            mode="aspectFill"
+            data-id="{{item.id}}"
+            binderror="handlePreviewImageError"
+          />
+        </block>
+        <view wx:else class="image-fallback">
+          <text>图片加载失败</text>
+        </view>
+        <view class="preview-info">
+          <text class="preview-score">置信度 {{item.scoreText}}</text>
+          <text class="preview-meta">{{item.datetime}}</text>
+          <text class="preview-meta">{{item.device}}</text>
+        </view>
+      </view>
+    </view>
+
+    <view wx:else class="empty-panel">
+      <text class="empty-title">还没有抓拍图片</text>
+      <text class="empty-desc">当 MQTT 收到人脸裁剪图后，这里会自动出现最新的人脸抓拍。</text>
+    </view>
+  </view>
+</view>

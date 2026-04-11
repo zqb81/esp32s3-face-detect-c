@@ -1,0 +1,3 @@
+.compact-button {
+  min-width: 184rpx;
+}
