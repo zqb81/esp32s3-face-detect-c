@@ -6,6 +6,7 @@
 - TFT 本地预览与人脸框显示
 - MQTT 检测结果与人脸裁剪上传
 - Web 端上传服务、实时画面和检测看板
+- 微信小程序结果看板
 
 当前项目已经打通以下链路：
 
@@ -16,6 +17,7 @@
 - MQTT 上报检测框和人脸裁剪图
 - HTTP 上传最新 JPEG 到 `web/` 服务
 - Web 端展示原始流、叠框流、检测记录和最近抓拍
+- 微信小程序复用 Web JSON 接口展示统计、记录和抓拍
 
 ## 1. 项目状态
 
@@ -24,6 +26,7 @@
 - 人脸模型可以正常加载
 - 本地 TFT 检测框已经恢复显示
 - Web 前后端代码统一放在 `web/` 目录
+- 原生微信小程序前端已创建在 `miniapp/` 目录
 - 云端叠框所需的 `frame`、`img_w`、`img_h` 已加入 MQTT 消息
 - Web 端“最近检测时间”显示成 `1970-01-01 08:xx:xx` 的问题已修复
 - 设备端已加入帧率优化版本：
@@ -88,10 +91,22 @@ upload_task
 | 文件 | 作用 |
 |------|------|
 | `web/app.py` | Web 服务主程序，负责上传接口、MQTT 接收、数据库、看板页面 |
+| `web/README.md` | Web 服务单独说明文档 |
 | `web/templates/index.html` | Web 看板页面 |
 | `web/start.sh` | Web 服务启动脚本 |
 | `web/requirements.txt` | Web 依赖 |
 | `web/video_relay.py` | 兼容保留文件，当前部署优先使用 `web/app.py` |
+
+### 微信小程序主要文件
+
+| 文件 | 作用 |
+|------|------|
+| `miniapp/README.md` | 微信小程序使用说明 |
+| `miniapp/app.json` | 小程序全局页面配置 |
+| `miniapp/utils/api.js` | 小程序接口封装与 `BASE_URL` |
+| `miniapp/pages/home/home.*` | 首页看板 |
+| `miniapp/pages/detections/detections.*` | 检测记录页 |
+| `miniapp/pages/faces/faces.*` | 人脸抓拍页 |
 
 ## 5. 模型说明
 
@@ -232,6 +247,10 @@ idf.py -B build-codex -p COM8 flash
 
 `web/` 目录就是当前云端服务代码。
 
+Web 服务更详细的说明见：
+
+- `web/README.md`
+
 安装依赖并启动：
 
 ```bash
@@ -249,6 +268,34 @@ python3 app.py
 默认端口：
 
 - `8082`
+
+### 微信小程序前端
+
+微信小程序前端位于：
+
+- `miniapp/`
+
+更详细的说明见：
+
+- `miniapp/README.md`
+
+当前小程序复用以下 Web JSON 接口：
+
+- `/api/stats`
+- `/api/latest_detection`
+- `/api/detections`
+- `/api/face_images`
+- `/api/face_image/<id>`
+
+当前小程序默认访问地址配置为：
+
+- `https://api.lzjqpb.icu`
+
+说明：
+
+- 真机调试和正式上线时，应配置 `request` 与 `downloadFile` 合法域名
+- 小程序不直接连接 MQTT，也不直接连接 ESP32
+- 当前小程序主要用于展示统计、检测记录和人脸抓拍
 
 ## 10. Web 接口说明
 
@@ -325,9 +372,21 @@ python3 app.py
 
 ### 设备端上传地址
 
-当前设备端把 JPEG 上传到：
+当前设备端固件里写死的 JPEG 上传地址是：
 
 - `http://101.33.209.65:8082/upload`
+
+对应代码位置：
+
+- `main/http_stream.c`
+
+如果后续要把设备端上传地址切到域名或 HTTPS，需要同步修改 `UPLOAD_URL`。
+
+### 对外 HTTPS 访问地址
+
+当前给 Web / 微信小程序使用的对外 HTTPS 访问地址为：
+
+- `https://api.lzjqpb.icu`
 
 ### 本地流地址
 
