@@ -6,3 +6,4 @@ sdkconfig.old
 dependencies.lock
 .vscode/
 _tmp_espdl_upstream/
+miniapp/project.private.config.json
