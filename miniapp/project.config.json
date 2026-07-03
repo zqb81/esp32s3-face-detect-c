@@ -3,7 +3,7 @@
   "compileType": "miniprogram",
   "libVersion": "trial",
   "miniprogramRoot": "./",
-  "projectname": "esp32s3-face-detect-miniapp",
+  "projectname": "esp32s3-ai-security-c-miniapp",
   "setting": {
     "urlCheck": false,
     "es6": true,
