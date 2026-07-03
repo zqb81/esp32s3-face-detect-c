@@ -4,7 +4,7 @@
       <view>
         <text class="hero-eyebrow">微信小程序结果看板</text>
         <text class="hero-title">ESP32-S3 人脸检测</text>
-        <text class="hero-desc">聚合现有 Python 服务数据，专注展示运行状态、最新检测结果和抓拍信息。</text>
+        <text class="hero-desc">聚合后端服务数据，展示运行状态、最新检测结果和抓拍信息。</text>
       </view>
       <view class="status-pill {{connected ? 'connected' : 'disconnected'}}">
         <view class="status-dot"></view>
@@ -16,6 +16,7 @@
       <view class="nav-item active">首页</view>
       <view class="nav-item" bindtap="goDetections">检测记录</view>
       <view class="nav-item" bindtap="goFaces">人脸抓拍</view>
+      <view class="nav-item" bindtap="goControl">语音控制</view>
     </view>
   </view>
 

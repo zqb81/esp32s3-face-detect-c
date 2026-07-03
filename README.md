@@ -2,22 +2,27 @@
 
 这是一个基于 ESP-IDF 和 `esp-dl` 的 ESP32-S3 实时人脸检测项目，包含：
 
-- 设备端固件
+- 设备端固件（C / ESP-IDF 5.4.x）
 - TFT 本地预览与人脸框显示
 - MQTT 检测结果与人脸裁剪上传
+- 语音交互（I2S 麦克风 + 扬声器 + TCP 语音服务）
+- 设备控制（蜂鸣器 + WS2812 RGB 灯带）
 - Web 端上传服务、实时画面和检测看板
-- 微信小程序结果看板
+- 微信小程序结果看板（含设备控制 + 语音助手）
 
 当前项目已经打通以下链路：
 
 - OV5640 采集 JPEG 图像
 - ESP32-S3 解码为 RGB565
 - `esp-dl` 两级人脸检测模型推理
-- ST7735 TFT 显示检测框
+- ST7735 TFT 显示检测框（手动 CS 控制）
 - MQTT 上报检测框和人脸裁剪图
 - HTTP 上传最新 JPEG 到 `web/` 服务
 - Web 端展示原始流、叠框流、检测记录和最近抓拍
 - 微信小程序复用 Web JSON 接口展示统计、记录和抓拍
+- 语音交互：INMP441 麦克风录音 → TCP 发送到云端 ASR/LLM/TTS → MAX98357A 扬声器播放
+- 设备控制：蜂鸣器 (LEDC PWM) + WS2812 RGB 灯带 (RMT)
+- Web 和小程序端的语音助手 UI + 设备控制面板
 
 ## 1. 项目状态
 
@@ -28,8 +33,13 @@
 - Web 前后端代码统一放在 `web/` 目录
 - 原生微信小程序前端已创建在 `miniapp/` 目录
 - 云端叠框所需的 `frame`、`img_w`、`img_h` 已加入 MQTT 消息
-- Web 端“最近检测时间”显示成 `1970-01-01 08:xx:xx` 的问题已修复
-- Web 看板已支持在 `socket.io` 客户端不可用时自动降级到 5 秒轮询，避免页面只剩视频流、统计和抓拍区不刷新
+- Web 端”最近检测时间”显示成 `1970-01-01 08:xx:xx` 的问题已修复
+- Web 看板已支持在 `socket.io` 客户端不可用时自动降级到 5 秒轮询
+- 语音交互模块已集成（I2S 录音/播放 + TCP 语音服务）
+- 设备控制模块已集成（蜂鸣器 GPIO48 + WS2812 RGB GPIO38）
+- Web 和小程序设备控制 UI 已同步更新（仅蜂鸣器 + RGB，无风扇/LED/传感器）
+- 内存优化：heap/FreeRTOS/ringbuf 函数移至 Flash，mbedTLS 分配移至 PSRAM
+- ST7735 显示修复：完整初始化序列 + 手动 CS 控制
 - 设备端已加入帧率优化版本：
   - 远端 HTTP 上传改为异步上传线程
   - 人脸裁剪图 MQTT 发布改为异步 worker
@@ -39,11 +49,27 @@
 
 ## 2. 硬件信息
 
-| 部件 | 型号 |
-|------|------|
-| MCU | ESP32-S3-WROOM-1 N16R8 |
-| 摄像头 | OV5640 |
-| 显示屏 | ST7735 1.8 寸 TFT，128x160 |
+| 部件 | 型号 | 引脚 |
+|------|------|------|
+| MCU | ESP32-S3-WROOM-1 N16R8 | — |
+| 摄像头 | OV5640 | D0-D7: 11,9,8,10,12,18,17,16; XCLK:15 PCLK:13 VSYNC:6 HREF:7 SDA:4 SCL:5 |
+| 显示屏 | ST7735 1.8寸 128×160 | SCK:14 MOSI:21 CS:2 DC:1 RST:3 BL:47 |
+| 麦克风 | INMP441 (I2S) | SCK:39 WS:40 SD:41 |
+| 扬声器 | MAX98357A (I2S) | BCLK:42 LRC:43 DIN:44 |
+| 蜂鸣器 | 有源蜂鸣器 (LEDC PWM) | GPIO 48 |
+| RGB灯带 | WS2812 ×5 (RMT) | GPIO 38 |
+| 按键 | 语音触发按钮 | GPIO 45 |
+
+### GPIO 约束
+
+ESP32-S3 搭配 Octal PSRAM 时，以下引脚不可用：
+
+- GPIO 22-25：不存在
+- GPIO 26：PSRAM CS
+- GPIO 27-32：Flash SPI
+- GPIO 33-37：Octal PSRAM 数据线
+
+可用于外设的剩余 GPIO：0, 38, 46, 48
 
 ## 3. 系统架构
 
@@ -55,6 +81,18 @@ OV5640 (QVGA JPEG)
   -> TFT 本地叠框显示
   -> MQTT 上传检测框 / 人脸裁剪
   -> HTTP 上传最新 JPEG 到 Web 服务
+
+语音交互 (按键触发)
+  -> INMP441 I2S 录音
+  -> TCP 发送到云端语音服务 (<server-ip>:9000)
+  -> ASR -> LLM -> TTS
+  -> MAX98357A I2S 播放回复
+  -> 解析动作指令控制蜂鸣器/RGB
+
+设备控制 (MQTT cmd)
+  -> esp32/iot/cmd/buzzer  -> LEDC PWM (GPIO48)
+  -> esp32/iot/cmd/rgb     -> WS2812 RMT (GPIO38)
+  -> esp32/iot/cmd/facedetect -> 软件开关
 ```
 
 当前帧率优化后的核心处理思路：
@@ -90,10 +128,14 @@ face_crop_task
 |------|------|
 | `main/main.c` | 程序入口、Wi-Fi、任务调度、图像处理主链路 |
 | `main/camera.c` | OV5640 初始化、采图、JPEG 解码 |
-| `main/display.c` | ST7735 显示驱动 |
+| `main/display.c` | ST7735 显示驱动（手动 CS 控制） |
 | `main/face_detect.cpp` | `esp-dl` 人脸检测封装 |
 | `main/http_stream.c` | 本地 MJPEG 流和异步 HTTP 上传 |
 | `main/mqtt_comm.c` | MQTT 检测结果与裁剪图上传 |
+| `main/voice_i2s.c` | I2S 麦克风/扬声器驱动 |
+| `main/voice_client.c` | TCP 语音客户端（录音→发送→接收 TTS） |
+| `main/voice_task.c` | 语音任务（按键触发交互 + 动作执行） |
+| `main/device_ctrl.c` | 设备控制（蜂鸣器 LEDC + WS2812 RMT） |
 | `main/config.h` | 引脚、网络、运行参数 |
 
 ### Web 端主要文件
@@ -117,6 +159,7 @@ face_crop_task
 | `miniapp/pages/home/home.*` | 首页看板 |
 | `miniapp/pages/detections/detections.*` | 检测记录页 |
 | `miniapp/pages/faces/faces.*` | 人脸抓拍页 |
+| `miniapp/pages/control/control.*` | 设备控制页（蜂鸣器/RGB/语音助手） |
 
 ## 5. 模型说明
 
@@ -322,16 +365,25 @@ python3 app.py
 - `/api/detections`
 - `/api/face_images`
 - `/api/face_image/<id>`
+- `/api/voice_chat`
+- `/api/device`
 
 当前小程序默认访问地址配置为：
 
-- `https://api.lzjqpb.icu`
+- `https://<your-domain>`
+
+小程序包含 4 个页面：
+
+- **首页**：统计概览、最新检测结果、人脸抓拍预览
+- **检测记录**：历史检测列表
+- **人脸抓拍**：人脸裁剪图库
+- **设备控制**：蜂鸣器开关、RGB 灯带颜色选择、语音助手对话
 
 说明：
 
 - 真机调试和正式上线时，应配置 `request` 与 `downloadFile` 合法域名
 - 小程序不直接连接 MQTT，也不直接连接 ESP32
-- 当前小程序主要用于展示统计、检测记录和人脸抓拍
+- 设备控制通过 Web 后端的 `/api/device` 转发 MQTT 命令实现
 
 ## 10. Web 接口说明
 
@@ -352,10 +404,16 @@ python3 app.py
   - 最近检测记录
 - `GET /api/face_images`
   - 最近人脸裁剪图
+- `GET /api/face_image/<id>`
+  - 指定人脸抓拍 JPEG
 - `GET /api/latest_detection`
   - 最近一次检测结果
 - `GET /api/stats`
   - 总检测数、总人脸数、在线设备数、最近检测时间
+- `POST /api/voice_chat`
+  - 语音助手对话（文本输入 → LLM 回复 + 设备动作）
+- `POST /api/device`
+  - 设备控制（`action`: buzzer/rgb/face_detect，`state`: on/off/颜色名）
 
 ## 11. 看板显示逻辑
 
@@ -417,7 +475,7 @@ python3 app.py
 
 当前设备端固件里写死的 JPEG 上传地址是：
 
-- `http://101.33.209.65:8082/upload`
+- `http://<server-ip>:8082/upload`
 
 对应代码位置：
 
@@ -429,7 +487,7 @@ python3 app.py
 
 当前给 Web / 微信小程序使用的对外 HTTPS 访问地址为：
 
-- `https://api.lzjqpb.icu`
+- `https://<your-domain>`
 
 ### 本地流地址
 
@@ -510,3 +568,5 @@ Web 依赖定义在：
 - 对 `TFT_CHUNK_ROWS` 做小范围基准测试
 - 让检测节奏完全配置化，而不是只保留固定默认值
 - 继续完善上传失败重试和状态展示
+- 考虑人脸识别（人脸注册 + 比对）扩展
+- 语音唤醒词支持（替代物理按键触发）

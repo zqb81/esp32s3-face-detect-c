@@ -30,6 +30,8 @@
 #include "face_detect.h"
 #include "http_stream.h"
 #include "mqtt_comm.h"
+#include "voice_task.h"
+#include "device_ctrl.h"
 
 static const char *TAG = "main";
 
@@ -40,12 +42,14 @@ static uint8_t *s_pool[POOL_COUNT] = {NULL};
 static QueueHandle_t s_free_queue = NULL;
 static QueueHandle_t s_work_queue = NULL;
 
-typedef struct {
+typedef struct
+{
     uint8_t *data;
     size_t len;
 } frame_msg_t;
 
-typedef struct {
+typedef struct
+{
     uint32_t count;
     uint64_t total_us;
     uint32_t max_us;
@@ -53,20 +57,23 @@ typedef struct {
 
 static void perf_bucket_add(perf_bucket_t *bucket, int64_t elapsed_us)
 {
-    if (!bucket || elapsed_us < 0) {
+    if (!bucket || elapsed_us < 0)
+    {
         return;
     }
 
     bucket->count++;
     bucket->total_us += (uint64_t)elapsed_us;
-    if ((uint32_t)elapsed_us > bucket->max_us) {
+    if ((uint32_t)elapsed_us > bucket->max_us)
+    {
         bucket->max_us = (uint32_t)elapsed_us;
     }
 }
 
 static float perf_bucket_avg_ms(const perf_bucket_t *bucket)
 {
-    if (!bucket || bucket->count == 0) {
+    if (!bucket || bucket->count == 0)
+    {
         return 0.0f;
     }
     return (float)bucket->total_us / 1000.0f / (float)bucket->count;
@@ -74,7 +81,8 @@ static float perf_bucket_avg_ms(const perf_bucket_t *bucket)
 
 static float perf_bucket_max_ms(const perf_bucket_t *bucket)
 {
-    if (!bucket) {
+    if (!bucket)
+    {
         return 0.0f;
     }
     return (float)bucket->max_us / 1000.0f;
@@ -82,7 +90,8 @@ static float perf_bucket_max_ms(const perf_bucket_t *bucket)
 
 static void perf_bucket_reset(perf_bucket_t *bucket)
 {
-    if (!bucket) {
+    if (!bucket)
+    {
         return;
     }
     bucket->count = 0;
@@ -93,12 +102,14 @@ static void perf_bucket_reset(perf_bucket_t *bucket)
 static void face_list_replace(face_list_t *dst, const face_list_t *src)
 {
     face_detect_free(dst);
-    if (!src || src->count <= 0 || !src->faces) {
+    if (!src || src->count <= 0 || !src->faces)
+    {
         return;
     }
 
     dst->faces = calloc(src->count, sizeof(face_result_t));
-    if (!dst->faces) {
+    if (!dst->faces)
+    {
         return;
     }
 
@@ -131,9 +142,11 @@ static void wifi_init(void)
 
     ESP_LOGI(TAG, "Connecting Wi-Fi: %s", WIFI_SSID);
 
-    for (int i = 0; i < WIFI_MAX_RETRY; i++) {
+    for (int i = 0; i < WIFI_MAX_RETRY; i++)
+    {
         wifi_ap_record_t ap_info;
-        if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
+        if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK)
+        {
             ESP_LOGI(TAG, "Wi-Fi connected");
             return;
         }
@@ -154,11 +167,13 @@ static void downsample_frame(const uint8_t *src,
     int dst_off = 0;
     int src_y = 0;
 
-    for (int row = 0; row < dst_h; row++) {
+    for (int row = 0; row < dst_h; row++)
+    {
         int src_row = src_h - 1 - src_y;
         int src_row_off = src_row * src_stride;
 
-        for (int col = 0; col < dst_w; col++) {
+        for (int col = 0; col < dst_w; col++)
+        {
             int src_off = src_row_off + col * 4;
             dst[dst_off] = src[src_off];
             dst[dst_off + 1] = src[src_off + 1];
@@ -176,7 +191,8 @@ static void draw_face_boxes(uint8_t *buf,
                             int cam_w,
                             int cam_h)
 {
-    for (int i = 0; i < faces->count; i++) {
+    for (int i = 0; i < faces->count; i++)
+    {
         const face_result_t *f = &faces->faces[i];
         float cx = (f->x1 + f->x2) / 2.0f * dst_w / cam_w;
         float cy = (dst_h - 1) - (f->y1 + f->y2) / 2.0f * dst_h / cam_h;
@@ -188,23 +204,30 @@ static void draw_face_boxes(uint8_t *buf,
         int dx2 = (int)(cx + hw);
         int dy2 = (int)(cy + hh);
 
-        if (dx1 < 0) {
+        if (dx1 < 0)
+        {
             dx1 = 0;
         }
-        if (dy1 < 0) {
+        if (dy1 < 0)
+        {
             dy1 = 0;
         }
-        if (dx2 >= dst_w) {
+        if (dx2 >= dst_w)
+        {
             dx2 = dst_w - 1;
         }
-        if (dy2 >= dst_h) {
+        if (dy2 >= dst_h)
+        {
             dy2 = dst_h - 1;
         }
 
         uint16_t color = COLOR_RED;
-        if (f->score > 0.8f) {
+        if (f->score > 0.8f)
+        {
             color = COLOR_GREEN;
-        } else if (f->score > 0.6f) {
+        }
+        else if (f->score > 0.6f)
+        {
             color = COLOR_YELLOW;
         }
 
@@ -216,26 +239,33 @@ static void capture_task(void *arg)
 {
     ESP_LOGI(TAG, "Capture task start on core %d", xPortGetCoreID());
 
-    while (1) {
+    while (1)
+    {
         camera_fb_t *fb = camera_capture();
-        if (!fb) {
+        if (!fb)
+        {
             vTaskDelay(pdMS_TO_TICKS(5));
             continue;
         }
 
         uint8_t *buf = NULL;
-        if (xQueueReceive(s_free_queue, &buf, 0) == pdTRUE) {
-            if (fb->len <= POOL_BUF_SIZE) {
+        if (xQueueReceive(s_free_queue, &buf, 0) == pdTRUE)
+        {
+            if (fb->len <= POOL_BUF_SIZE)
+            {
                 memcpy(buf, fb->buf, fb->len);
 
                 frame_msg_t msg = {
                     .data = buf,
                     .len = fb->len,
                 };
-                if (xQueueSend(s_work_queue, &msg, 0) != pdTRUE) {
+                if (xQueueSend(s_work_queue, &msg, 0) != pdTRUE)
+                {
                     xQueueSend(s_free_queue, &buf, 0);
                 }
-            } else {
+            }
+            else
+            {
                 xQueueSend(s_free_queue, &buf, 0);
                 ESP_LOGW(TAG, "JPEG too large: %zu > %d", fb->len, POOL_BUF_SIZE);
             }
@@ -252,7 +282,8 @@ static void process_task(void *arg)
     uint8_t *rgb_buf = heap_caps_malloc(CAM_W * CAM_H * 2, MALLOC_CAP_SPIRAM);
     uint8_t *tft_buf = heap_caps_malloc(TFT_WIDTH * TFT_HEIGHT * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
-    if (!rgb_buf || !tft_buf) {
+    if (!rgb_buf || !tft_buf)
+    {
         ESP_LOGE(TAG, "Process buffers allocation failed");
         free(rgb_buf);
         free(tft_buf);
@@ -272,9 +303,11 @@ static void process_task(void *arg)
     perf_bucket_t display_perf = {0};
     perf_bucket_t total_perf = {0};
 
-    while (1) {
+    while (1)
+    {
         frame_msg_t msg;
-        if (xQueueReceive(s_work_queue, &msg, pdMS_TO_TICKS(500)) != pdTRUE) {
+        if (xQueueReceive(s_work_queue, &msg, pdMS_TO_TICKS(500)) != pdTRUE)
+        {
             continue;
         }
 
@@ -291,7 +324,8 @@ static void process_task(void *arg)
         http_stream_submit_upload(msg.data, msg.len);
         xQueueSend(s_free_queue, &msg.data, 0);
 
-        if (dec_ret != ESP_OK || out_w <= 0 || out_h <= 0) {
+        if (dec_ret != ESP_OK || out_w <= 0 || out_h <= 0)
+        {
             continue;
         }
 
@@ -300,34 +334,44 @@ static void process_task(void *arg)
         perf_bucket_add(&downsample_perf, esp_timer_get_time() - downsample_start_us);
 
         face_list_t faces = {0};
-        if (FACE_DETECT_INTERVAL_FRAMES > 0 && (frame % FACE_DETECT_INTERVAL_FRAMES) == 0) {
+        if (FACE_DETECT_INTERVAL_FRAMES > 0 && (frame % FACE_DETECT_INTERVAL_FRAMES) == 0)
+        {
             int64_t detect_start_us = esp_timer_get_time();
             esp_err_t det_ret = face_detect_run(rgb_buf, out_w, out_h, &faces);
             perf_bucket_add(&detect_perf, esp_timer_get_time() - detect_start_us);
-            if (det_ret != ESP_OK) {
+            if (det_ret != ESP_OK)
+            {
                 ESP_LOGW(TAG, "face_detect_run failed on frame %d: %s", frame, esp_err_to_name(det_ret));
-            } else if (faces.count > 0) {
+            }
+            else if (faces.count > 0)
+            {
                 mqtt_send_faces(&faces, frame, out_w, out_h);
                 face_list_replace(&last_faces, &faces);
 
                 const face_result_t *best = &faces.faces[0];
-                for (int i = 1; i < faces.count; i++) {
-                    if (faces.faces[i].score > best->score) {
+                for (int i = 1; i < faces.count; i++)
+                {
+                    if (faces.faces[i].score > best->score)
+                    {
                         best = &faces.faces[i];
                     }
                 }
 
-                if (best->score > FACE_SCORE_THRESHOLD) {
+                if (best->score > FACE_SCORE_THRESHOLD)
+                {
                     int64_t crop_submit_start_us = esp_timer_get_time();
                     mqtt_send_face_crop(rgb_buf, out_w, out_h, best);
                     perf_bucket_add(&crop_submit_perf, esp_timer_get_time() - crop_submit_start_us);
                 }
-            } else {
+            }
+            else
+            {
                 face_detect_free(&last_faces);
             }
         }
 
-        if (last_faces.count > 0) {
+        if (last_faces.count > 0)
+        {
             draw_face_boxes(tft_buf, &last_faces, TFT_WIDTH, TFT_HEIGHT, out_w, out_h);
         }
 
@@ -340,8 +384,11 @@ static void process_task(void *arg)
         fps_count++;
         perf_bucket_add(&total_perf, esp_timer_get_time() - frame_start_us);
 
+        taskYIELD();  // Let IDLE1 feed the watchdog
+
         int64_t elapsed_ms = (esp_timer_get_time() - fps_time) / 1000;
-        if (elapsed_ms >= PERF_LOG_INTERVAL_MS) {
+        if (elapsed_ms >= PERF_LOG_INTERVAL_MS)
+        {
             float fps = fps_count * 1000.0f / elapsed_ms;
             size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
             size_t ram_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
@@ -386,10 +433,11 @@ static void process_task(void *arg)
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "=== ESP32-S3 Face Detect v0.4 ===");
+    ESP_LOGW(TAG, "=== ESP32-S3 Face Detect v0.4 ===");
 
     esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND)
+    {
         ESP_ERROR_CHECK(nvs_flash_erase());
         ret = nvs_flash_init();
     }
@@ -399,14 +447,17 @@ void app_main(void)
 
     s_free_queue = xQueueCreate(POOL_COUNT, sizeof(uint8_t *));
     s_work_queue = xQueueCreate(POOL_COUNT, sizeof(frame_msg_t));
-    if (!s_free_queue || !s_work_queue) {
+    if (!s_free_queue || !s_work_queue)
+    {
         ESP_LOGE(TAG, "Queue allocation failed");
         return;
     }
 
-    for (int i = 0; i < POOL_COUNT; i++) {
+    for (int i = 0; i < POOL_COUNT; i++)
+    {
         s_pool[i] = heap_caps_malloc(POOL_BUF_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (!s_pool[i]) {
+        if (!s_pool[i])
+        {
             ESP_LOGE(TAG, "Pool buffer %d allocation failed", i);
             return;
         }
@@ -420,35 +471,52 @@ void app_main(void)
              POOL_COUNT * POOL_BUF_SIZE / 1024);
 
     ret = display_init();
-    if (ret != ESP_OK) {
+    if (ret != ESP_OK)
+    {
         ESP_LOGE(TAG, "display_init failed: %s", esp_err_to_name(ret));
         return;
     }
 
     ret = camera_init();
-    if (ret != ESP_OK) {
+    if (ret != ESP_OK)
+    {
         ESP_LOGE(TAG, "camera_init failed: %s", esp_err_to_name(ret));
         return;
     }
 
     ret = face_detect_init();
-    if (ret != ESP_OK) {
+    if (ret != ESP_OK)
+    {
         ESP_LOGE(TAG, "face_detect_init failed: %s", esp_err_to_name(ret));
         return;
     }
 
     ret = mqtt_init();
-    if (ret != ESP_OK) {
+    if (ret != ESP_OK)
+    {
         ESP_LOGE(TAG, "mqtt_init failed: %s", esp_err_to_name(ret));
     }
 
     ret = http_stream_start(HTTP_STREAM_PORT);
-    if (ret != ESP_OK) {
+    if (ret != ESP_OK)
+    {
         ESP_LOGE(TAG, "http_stream_start failed: %s", esp_err_to_name(ret));
     }
 
     ESP_LOGI(TAG, "HTTP stream endpoint: http://<device-ip>:%d", HTTP_STREAM_PORT);
     ESP_LOGI(TAG, "Face models are loaded from raw partition label 'model'");
+
+    ret = device_ctrl_init_all();
+    if (ret != ESP_OK)
+    {
+        ESP_LOGW(TAG, "device_ctrl_init_all failed: %s", esp_err_to_name(ret));
+    }
+
+    ret = voice_task_start();
+    if (ret != ESP_OK)
+    {
+        ESP_LOGW(TAG, "voice_task_start failed: %s (voice control unavailable)", esp_err_to_name(ret));
+    }
 
     xTaskCreatePinnedToCore(capture_task, "capture", 4096, NULL, 5, NULL, 0);
     xTaskCreatePinnedToCore(process_task, "process", TASK_STACK_SIZE * 4, NULL, TASK_PRIORITY, NULL, 1);

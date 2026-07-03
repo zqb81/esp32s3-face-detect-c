@@ -1,0 +1,15 @@
+/**
+ * 私有配置模板 — 复制为 config_private.h 并填入实际值
+ * config_private.h 已被 .gitignore 排除，不会提交到仓库
+ */
+
+#ifndef CONFIG_PRIVATE_H
+#define CONFIG_PRIVATE_H
+
+#define WIFI_SSID           "your_wifi_ssid"
+#define WIFI_PASS           "your_wifi_password"
+#define MQTT_BROKER         "your_mqtt_broker_ip"
+#define VOICE_SERVER_HOST   "your_voice_server_ip"
+#define HTTP_UPLOAD_URL     "http://your_server_ip:8082/upload"
+
+#endif // CONFIG_PRIVATE_H

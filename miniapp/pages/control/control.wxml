@@ -1,0 +1,48 @@
+<view class="page">
+  <!-- 设备控制 -->
+  <view class="section">
+    <view class="section-title">🎛️ 设备控制</view>
+    <view class="device-grid">
+      <view class="device-card">
+        <text class="d-icon">🔔</text>
+        <text class="d-name">蜂鸣器</text>
+        <switch checked="{{buzzerOn}}" color="#22c55e" bindchange="toggleBuzzer"/>
+      </view>
+      <view class="device-card">
+        <text class="d-icon">👁️</text>
+        <text class="d-name">人脸检测</text>
+        <switch checked="{{faceOn}}" color="#22c55e" bindchange="toggleFace"/>
+      </view>
+    </view>
+  </view>
+
+  <!-- RGB灯带 -->
+  <view class="section">
+    <view class="section-title">🌈 RGB灯带 (×5)</view>
+    <view class="rgb-grid">
+      <view class="rgb-btn {{rgbColor === 'red' ? 'active' : ''}}" style="background:#ef4444" bindtap="setRgbColor" data-color="red"><text>红</text></view>
+      <view class="rgb-btn {{rgbColor === 'green' ? 'active' : ''}}" style="background:#22c55e" bindtap="setRgbColor" data-color="green"><text>绿</text></view>
+      <view class="rgb-btn {{rgbColor === 'blue' ? 'active' : ''}}" style="background:#3b82f6" bindtap="setRgbColor" data-color="blue"><text>蓝</text></view>
+      <view class="rgb-btn {{rgbColor === 'yellow' ? 'active' : ''}}" style="background:#facc15;color:#000" bindtap="setRgbColor" data-color="yellow"><text>黄</text></view>
+      <view class="rgb-btn {{rgbColor === 'purple' ? 'active' : ''}}" style="background:#a855f7" bindtap="setRgbColor" data-color="purple"><text>紫</text></view>
+      <view class="rgb-btn {{rgbColor === 'white' ? 'active' : ''}}" style="background:#fff;color:#000" bindtap="setRgbColor" data-color="white"><text>白</text></view>
+      <view class="rgb-btn off-btn {{rgbColor === 'off' ? 'active' : ''}}" bindtap="setRgbColor" data-color="off"><text>关</text></view>
+    </view>
+  </view>
+
+  <!-- 语音聊天 -->
+  <view class="section">
+    <view class="section-title">🎤 语音助手</view>
+    <scroll-view class="chat-box" scroll-y scroll-into-view="{{scrollId}}">
+      <view wx:for="{{chatMsgs}}" wx:key="id" class="chat-msg {{item.role}}">
+        <view class="bubble">{{item.text}}</view>
+        <view class="msg-time">{{item.time}}</view>
+      </view>
+      <view id="chat-bottom"></view>
+    </scroll-view>
+    <view class="chat-input-row">
+      <input class="chat-input" placeholder="输入命令..." value="{{chatInput}}" bindinput="onChatInput" bindconfirm="sendChat" confirm-type="send"/>
+      <view class="send-btn" bindtap="sendChat">发送</view>
+    </view>
+  </view>
+</view>

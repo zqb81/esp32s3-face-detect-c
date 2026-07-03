@@ -1,0 +1,22 @@
+.page { padding: 24rpx; background: #07111f; min-height: 100vh; }
+.section { margin-bottom: 32rpx; }
+.section-title { font-size: 30rpx; font-weight: 700; color: #e5eefc; margin-bottom: 16rpx; }
+.device-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16rpx; }
+.device-card { background: rgba(30,41,59,0.9); border-radius: 16rpx; padding: 24rpx; text-align: center; border: 1px solid rgba(148,163,184,0.15); display: flex; flex-direction: column; align-items: center; gap: 12rpx; }
+.d-icon { font-size: 48rpx; }
+.d-name { font-size: 24rpx; color: #94a3b8; }
+.rgb-grid { display: flex; flex-wrap: wrap; gap: 16rpx; }
+.rgb-btn { width: 80rpx; height: 80rpx; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 22rpx; color: #fff; font-weight: 700; border: 4rpx solid rgba(148,163,184,0.25); transition: transform 0.2s; }
+.rgb-btn.active { border-color: #fff; box-shadow: 0 0 16rpx rgba(255,255,255,0.4); transform: scale(1.1); }
+.rgb-btn.off-btn { background: rgba(51,65,85,0.9); border-style: dashed; }
+.chat-box { height: 400rpx; background: rgba(15,23,42,0.8); border-radius: 16rpx; padding: 16rpx; margin-bottom: 16rpx; }
+.chat-msg { margin-bottom: 16rpx; display: flex; flex-direction: column; }
+.chat-msg.user { align-items: flex-end; }
+.chat-msg.ai { align-items: flex-start; }
+.bubble { max-width: 80%; padding: 16rpx 20rpx; border-radius: 16rpx; font-size: 26rpx; line-height: 1.5; word-break: break-all; }
+.chat-msg.user .bubble { background: #3b82f6; color: #fff; border-bottom-right-radius: 4rpx; }
+.chat-msg.ai .bubble { background: rgba(30,41,59,0.95); color: #e5eefc; border: 1px solid rgba(148,163,184,0.15); border-bottom-left-radius: 4rpx; }
+.msg-time { font-size: 20rpx; color: #64748b; margin-top: 4rpx; }
+.chat-input-row { display: flex; gap: 12rpx; }
+.chat-input { flex: 1; background: rgba(15,23,42,0.9); border: 1px solid rgba(148,163,184,0.2); border-radius: 12rpx; padding: 16rpx 20rpx; color: #e5eefc; font-size: 28rpx; }
+.send-btn { background: #3b82f6; color: #fff; border-radius: 12rpx; padding: 16rpx 28rpx; font-size: 28rpx; white-space: nowrap; }

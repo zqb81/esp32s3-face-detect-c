@@ -1,4 +1,4 @@
-const BASE_URL = 'https://api.lzjqpb.icu';
+const { BASE_URL } = require('./config');
 
 
 function request(options) {

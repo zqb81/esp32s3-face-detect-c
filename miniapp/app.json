@@ -2,7 +2,8 @@
   "pages": [
     "pages/home/home",
     "pages/detections/detections",
-    "pages/faces/faces"
+    "pages/faces/faces",
+    "pages/control/control"
   ],
   "window": {
     "navigationBarTitleText": "ESP32-S3 人脸看板",

@@ -16,6 +16,7 @@ const {
 const PAGE_PATHS = {
   detections: '/pages/detections/detections',
   faces: '/pages/faces/faces',
+  control: '/pages/control/control',
   home: '/pages/home/home'
 };
 
@@ -146,7 +147,7 @@ Page({
 
       this.setData({
         connected,
-        errorMessage: connected ? '' : '当前无法连接到 Python 服务，请确认 `web/app.py` 已启动且 `BASE_URL` 配置正确。',
+        errorMessage: connected ? '' : '当前无法连接到后端服务，请确认 `web/app.py` 已启动且 `BASE_URL` 配置正确。',
         hasError: !connected,
         lastRefreshText: formatRefreshTime(Date.now()),
         latestDetection: detectionResult.ok ? normalizeDetection(detectionResult.data) : null,
@@ -212,6 +213,10 @@ Page({
 
   goFaces() {
     this.relaunchTo(PAGE_PATHS.faces);
+  },
+
+  goControl() {
+    this.relaunchTo(PAGE_PATHS.control);
   },
 
   relaunchTo(url) {

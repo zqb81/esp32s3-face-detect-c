@@ -1,5 +1,6 @@
 idf_component_register(
     SRCS "main.c" "camera.c" "display.c" "face_detect.cpp" "mqtt_comm.c" "http_stream.c"
+         "voice_i2s.c" "voice_client.c" "voice_task.c" "device_ctrl.c"
     INCLUDE_DIRS "."
     REQUIRES
         esp_wifi
@@ -13,5 +14,8 @@ idf_component_register(
         json
         driver
         spiffs
+        esp_driver_gpio
+        esp_driver_ledc
+        esp_driver_rmt
     # esp32-camera, esp-dl 通过 idf_component.yml 管理
 )

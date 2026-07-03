@@ -6,4 +6,10 @@ sdkconfig.old
 dependencies.lock
 .vscode/
 _tmp_espdl_upstream/
+
+# 私有配置 — 包含 WiFi/MQTT/服务器地址等敏感信息
+main/config_private.h
+web/.env
+miniapp/utils/config.js
+miniapp/project.config.json
 miniapp/project.private.config.json

@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -25,19 +26,25 @@ from flask import Flask, Response, jsonify, render_template, request
 from flask_socketio import SocketIO, emit
 from PIL import Image, ImageDraw
 
+# 加载 .env 文件（如果 python-dotenv 已安装）
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent / ".env")
+except ImportError:
+    pass
 
-APP_VERSION = "2026.04.08-2"
+APP_VERSION = "2026.07.04"
 DEVICE_TIMEOUT = 10
 FRAME_STALE_SECONDS = 3
 DETECTION_STALE_SECONDS = 1.5
 MIN_VALID_UNIX_TS = 1577808000  # 2020-01-01 00:00:00
 MAX_FUTURE_SKEW_SECONDS = 86400
-MQTT_BROKER = "127.0.0.1"
-MQTT_PORT = 1883
+MQTT_BROKER = os.environ.get("MQTT_BROKER", "127.0.0.1")
+MQTT_PORT = int(os.environ.get("MQTT_PORT", "1883"))
 FACE_TOPIC = "esp32/face_detect"
 CROP_TOPIC = "esp32/face_detect/crop"
 HOST = "0.0.0.0"
-PORT = 8082
+PORT = int(os.environ.get("WEB_PORT", "8082"))
 FRAME_INTERVAL_SECONDS = 0.05
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -397,6 +404,13 @@ def on_mqtt_connect(client, userdata, flags, rc):
 def on_mqtt_message(client, userdata, msg):
     try:
         raw = json.loads(msg.payload.decode())
+
+        # Cache face context
+        if msg.topic == FACE_TOPIC:
+            global _face_ctx
+            _face_ctx["count"] = raw.get("count", 0)
+            _face_ctx["faces"] = raw.get("faces", [])
+
         device_id = raw.get("device", "unknown")
         _device_last_seen[device_id] = time.time()
 
@@ -500,6 +514,65 @@ def api_face_image(face_id):
 def api_face_images():
     limit = request.args.get("limit", 20, type=int)
     return jsonify(get_recent_face_images(limit))
+
+
+# ===== Voice Chat API =====
+_face_ctx = {"count": 0, "faces": []}
+
+
+@app.route("/api/voice_chat", methods=["POST"])
+def api_voice_chat():
+    data = request.get_json()
+    text = data.get("text", "").strip()
+    if not text:
+        return jsonify({"reply": "请输入内容", "actions": []})
+    try:
+        from openai import OpenAI
+        import re
+        api_key = os.environ.get("XIAOMI_API_KEY", "")
+        if not api_key:
+            return jsonify({"reply": "API Key 未配置", "actions": []})
+        c = OpenAI(api_key=api_key, base_url="https://api.xiaomimimo.com/v1")
+        ctx = f"\n[当前人脸检测: 检测到 {_face_ctx['count']} 张人脸]" if _face_ctx["count"] > 0 else "\n[当前人脸检测: 未检测到人脸]"
+        sys_prompt = (
+            "你是一个智能门禁+安防助手。用简洁口语回复，每次不超过3句话。"
+            "你可以控制: RGB灯带(5颗WS2812)、蜂鸣器、人脸检测开关。"
+            "当用户要求控制设备时，在回复末尾用 [ACTION] 标记添加指令。\n"
+            '支持: [ACTION]{"action":"buzzer","state":"on"/"off"}[/ACTION]\n'
+            '[ACTION]{"action":"face_detect","state":"on"/"off"}[/ACTION]\n'
+            '[ACTION]{"action":"rgb","color":"red/green/blue/yellow/purple/white/off"}[/ACTION]\n'
+        )
+        resp = c.chat.completions.create(
+            model="mimo-v2.5",
+            messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": text + ctx}]
+        )
+        reply = resp.choices[0].message.content or ""
+        actions = []
+        for m in re.finditer(r"\[ACTION\](.*?)\[/ACTION\]", reply, re.DOTALL):
+            try: actions.append(json.loads(m.group(1)))
+            except: pass
+        clean = re.sub(r"\[ACTION\].*?\[/ACTION\]", "", reply, flags=re.DOTALL).strip()
+        return jsonify({"reply": clean, "actions": actions})
+    except Exception as e:
+        return jsonify({"reply": f"处理出错: {e}", "actions": []})
+
+
+@app.route("/api/device", methods=["POST"])
+def api_device():
+    data = request.get_json()
+    action = data.get("action", "")
+    state = data.get("state", "on")
+    if mqtt_client:
+        topic_map = {
+            "buzzer": "esp32/iot/cmd/buzzer",
+            "face_detect": "esp32/iot/cmd/facedetect",
+            "rgb": "esp32/iot/cmd/rgb",
+        }
+        topic = topic_map.get(action)
+        if topic:
+            mqtt_client.publish(topic, state)
+            return jsonify({"ok": True})
+    return jsonify({"ok": False, "msg": "MQTT not connected"})
 
 
 @socketio.on("connect")

@@ -21,7 +21,8 @@
 #include <string.h>
 
 static const char *TAG = "http";
-static const char *UPLOAD_URL = "http://101.33.209.65:8082/upload";
+// HTTP_UPLOAD_URL 定义在 config_private.h
+static const char *UPLOAD_URL = HTTP_UPLOAD_URL;
 
 static httpd_handle_t s_server = NULL;
 
