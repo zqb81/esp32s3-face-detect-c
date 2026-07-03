@@ -1,28 +1,98 @@
-# ESP32-S3 人脸检测项目
+# ESP32-S3 人脸检测 + 语音交互系统
 
-这是一个基于 ESP-IDF 和 `esp-dl` 的 ESP32-S3 实时人脸检测项目，包含：
+基于 ESP32-S3-WROOM-1 N16R8 的嵌入式 AI 门禁安防系统，核心能力：
 
-- 设备端固件（C / ESP-IDF 5.4.x）
-- TFT 本地预览与人脸框显示
-- MQTT 检测结果与人脸裁剪上传
-- 语音交互（I2S 麦克风 + 扬声器 + TCP 语音服务）
-- 设备控制（蜂鸣器 + WS2812 RGB 灯带）
-- Web 端上传服务、实时画面和检测看板
-- 微信小程序结果看板（含设备控制 + 语音助手）
+**人脸检测**：OV5640 摄像头实时采集 → `esp-dl` 两级模型（MSR + MNP）推理 → TFT 本地叠框 + MQTT 上报 + Web/小程序看板展示。
 
-当前项目已经打通以下链路：
+**语音交互**：按键触发录音（INMP441 I2S）→ TCP 发送云端 ASR/LLM/TTS → MAX98357A 扬声器播放回复，并通过语音指令直接控制设备。
 
-- OV5640 采集 JPEG 图像
-- ESP32-S3 解码为 RGB565
-- `esp-dl` 两级人脸检测模型推理
-- ST7735 TFT 显示检测框（手动 CS 控制）
-- MQTT 上报检测框和人脸裁剪图
-- HTTP 上传最新 JPEG 到 `web/` 服务
-- Web 端展示原始流、叠框流、检测记录和最近抓拍
-- 微信小程序复用 Web JSON 接口展示统计、记录和抓拍
-- 语音交互：INMP441 麦克风录音 → TCP 发送到云端 ASR/LLM/TTS → MAX98357A 扬声器播放
-- 设备控制：蜂鸣器 (LEDC PWM) + WS2812 RGB 灯带 (RMT)
-- Web 和小程序端的语音助手 UI + 设备控制面板
+其余功能：
+
+- 设备控制（蜂鸣器 LEDC PWM + WS2812 RGB 灯带 RMT），可由语音或 Web/小程序触发
+- Web 端看板（原始流、服务端叠框流、检测记录、人脸抓拍、语音助手）
+- 微信小程序（统计、记录、人脸抓拍、设备控制、语音助手）
+- 配置私有化：敏感信息（IP/密钥）全部通过 `.gitignore` 隔离，仓库只保留 `.example` 模板
+
+## 人脸检测
+
+### 处理流水线
+
+```text
+OV5640 (QVGA JPEG, 30fps)
+  → Core 0  拍照并写入帧缓冲池
+  → Core 1  JPEG 解码为 RGB565
+  → esp-dl  两级推理：MSR 粗检 → MNP 精定位
+  → 本地     ST7735 TFT 实时叠框显示
+  → MQTT     esp32/face_detect       ← 检测框 JSON（坐标 + 置信度）
+  → MQTT     esp32/face_detect/crop  ← 人脸裁剪图 Base64（节流发送）
+  → HTTP     POST /upload            ← 最新原始帧（异步上传线程）
+```
+
+### 关键设计
+
+- **异步上传**：HTTP 上传与 MQTT 裁剪图发布均在独立任务中运行，主处理链路不阻塞
+- **帧级跳帧**：每隔 `FACE_DETECT_INTERVAL` 帧才做一次完整推理，中间帧沿用上次检测框
+- **裁剪节流**：`FACE_CROP_INTERVAL_MS` 控制裁剪图发送频率，避免 MQTT 带宽饱和
+- **字节序修正**：模型输入使用 `RGB565BE`，与 OV5640 JPEG 解码后字节序一致
+- **PSRAM 全帧缓冲**：TFT 全分辨率缓冲区分配到 Octal PSRAM，不占用 SRAM
+
+### 相关文件
+
+| 文件 | 作用 |
+|------|------|
+| `main/face_detect.cpp` | `esp-dl` 推理封装，输入 RGB565BE 输出人脸框列表 |
+| `main/camera.c` | OV5640 初始化、JPEG 采集与解码 |
+| `main/mqtt_comm.c` | 检测框上报 + 异步裁剪图 Base64 编码 + MQTT 发布 |
+| `main/http_stream.c` | 本地 MJPEG 流 + 异步 HTTP 上传线程 |
+| `main/models/` | `face_msr.espdl`、`face_mnp.espdl` 模型文件 |
+
+---
+
+## 语音交互
+
+### 处理流水线
+
+```text
+按键 (GPIO 45) 按下
+  → INMP441 I2S 麦克风录音（16kHz, 16bit, 单声道）
+  → TCP 发送到云端语音服务 (<server>:9000)
+  → 云端：ASR（语音识别）→ LLM（意图理解）→ TTS（语音合成）
+  → TCP 接收 TTS 音频流
+  → MAX98357A I2S 扬声器播放回复
+  → 解析回复中的 [ACTION] 指令
+      → buzzer on/off     → LEDC PWM (GPIO 48)
+      → rgb <color>       → WS2812 RMT (GPIO 38)
+      → face_detect on/off → 软件开关
+```
+
+### 关键设计
+
+- **全双工 I2S 复用**：录音（I2S0）与播放（I2S1）使用独立外设，互不干扰
+- **流式 TTS 播放**：边接收 TCP 音频流边送入 I2S DMA，降低首字节延迟
+- **动作指令内联**：LLM 回复末尾嵌入 `[ACTION]{...}[/ACTION]` 标记，无需额外接口
+- **Web/小程序语音助手**：文字输入走 `/api/voice_chat`，后端调 LLM 并解析动作指令，与硬件按键共用同一套指令执行逻辑
+
+### System Prompt（设备动作能力）
+
+```
+你是一个智能门禁+安防助手。用简洁口语回复，每次不超过3句话。
+你可以控制: RGB灯带(5颗WS2812)、蜂鸣器、人脸检测开关。
+[ACTION]{"action":"buzzer","state":"on"/"off"}[/ACTION]
+[ACTION]{"action":"face_detect","state":"on"/"off"}[/ACTION]
+[ACTION]{"action":"rgb","color":"red/green/blue/yellow/purple/white/off"}[/ACTION]
+```
+
+### 相关文件
+
+| 文件 | 作用 |
+|------|------|
+| `main/voice_i2s.c` | I2S 麦克风（INMP441）+ 扬声器（MAX98357A）驱动 |
+| `main/voice_client.c` | TCP 语音客户端：录音 → 发送 → 接收 TTS |
+| `main/voice_task.c` | 按键触发交互主任务 + 解析并执行 [ACTION] 指令 |
+| `main/device_ctrl.c` | 蜂鸣器 LEDC + WS2812 RMT 执行层 |
+| `web/app.py` | `/api/voice_chat` 接口，LLM 调用 + 动作解析 + MQTT 转发 |
+
+---
 
 ## 1. 项目状态
 
